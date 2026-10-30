@@ -1,0 +1,275 @@
+{
+  "pagination": {
+    "ending_before": null,
+    "limit": 25,
+    "next_starting_after": null,
+    "next_uri": null,
+    "order": "desc",
+    "previous_ending_before": null,
+    "previous_uri": null,
+    "starting_after": null
+  },
+  "data": [
+    {
+      "amount": {
+        "amount": "0.00013400",
+        "currency": "ETH"
+      },
+      "created_at": "2026-08-10T11:43:19Z",
+      "id": "30000000-0000-0000-0000-000000000001",
+      "native_amount": {
+        "amount": "0.00",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000003/transactions/30000000-0000-0000-0000-000000000001",
+      "status": "completed",
+      "type": "staking_reward"
+    },
+    {
+      "amount": {
+        "amount": "0.01000000",
+        "currency": "USDC"
+      },
+      "created_at": "2026-07-15T09:00:00Z",
+      "id": "30000000-0000-0000-0000-000000000002",
+      "native_amount": {
+        "amount": "0.01",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000002/transactions/30000000-0000-0000-0000-000000000002",
+      "status": "completed",
+      "type": "interest"
+    },
+    {
+      "amount": {
+        "amount": "0.100000",
+        "currency": "ALGO"
+      },
+      "created_at": "2026-06-20T08:30:00Z",
+      "id": "30000000-0000-0000-0000-000000000003",
+      "native_amount": {
+        "amount": "0.02",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000001/transactions/30000000-0000-0000-0000-000000000003",
+      "status": "completed",
+      "type": "inflation_reward"
+    },
+    {
+      "amount": {
+        "amount": "0.00050000",
+        "currency": "ETH"
+      },
+      "created_at": "2026-05-10T08:00:00Z",
+      "description": "",
+      "id": "30000000-0000-0000-0000-000000000004",
+      "native_amount": {
+        "amount": "1.50",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000003/transactions/30000000-0000-0000-0000-000000000004",
+      "status": "completed",
+      "type": "earn_payout"
+    },
+    {
+      "amount": {
+        "amount": "0.10000000",
+        "currency": "BTC"
+      },
+      "buy": {
+        "fee": {
+          "amount": "14.90",
+          "currency": "USD"
+        },
+        "id": "40000000-0000-0000-0000-000000000001",
+        "payment_method_name": "Sample Bank",
+        "subtotal": {
+          "amount": "985.10",
+          "currency": "USD"
+        },
+        "total": {
+          "amount": "1000.00",
+          "currency": "USD"
+        }
+      },
+      "created_at": "2026-03-26T23:44:08Z",
+      "id": "30000000-0000-0000-0000-000000000005",
+      "native_amount": {
+        "amount": "1000.00",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000001/transactions/30000000-0000-0000-0000-000000000005",
+      "status": "completed",
+      "type": "buy"
+    },
+    {
+      "advanced_trade_fill": {
+        "commission": "2.50",
+        "fill_price": "50000.00",
+        "order_id": "40000000-0000-0000-0000-000000000002",
+        "order_side": "BUY",
+        "product_id": "BTC-USD"
+      },
+      "amount": {
+        "amount": "0.01000000",
+        "currency": "BTC"
+      },
+      "created_at": "2026-02-15T10:00:00Z",
+      "id": "30000000-0000-0000-0000-000000000006",
+      "native_amount": {
+        "amount": "500.00",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000001/transactions/30000000-0000-0000-0000-000000000006",
+      "status": "completed",
+      "type": "advanced_trade_fill"
+    },
+    {
+      "amount": {
+        "amount": "-0.01000000",
+        "currency": "BTC"
+      },
+      "created_at": "2026-01-20T14:00:00Z",
+      "id": "30000000-0000-0000-0000-000000000007",
+      "native_amount": {
+        "amount": "-450.00",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000001/transactions/30000000-0000-0000-0000-000000000007",
+      "status": "completed",
+      "trade": {
+        "id": "40000000-0000-0000-0000-000000000003",
+        "payment_method_name": "Sample BTC Wallet"
+      },
+      "type": "trade"
+    },
+    {
+      "amount": {
+        "amount": "-0.05000000",
+        "currency": "BTC"
+      },
+      "created_at": "2025-12-28T16:20:00Z",
+      "id": "30000000-0000-0000-0000-000000000008",
+      "native_amount": {
+        "amount": "-500.00",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000001/transactions/30000000-0000-0000-0000-000000000008",
+      "sell": {
+        "fee": {
+          "amount": "7.45",
+          "currency": "USD"
+        },
+        "id": "40000000-0000-0000-0000-000000000004",
+        "payment_method_name": "Sample USD Wallet",
+        "subtotal": {
+          "amount": "500.00",
+          "currency": "USD"
+        },
+        "total": {
+          "amount": "492.55",
+          "currency": "USD"
+        }
+      },
+      "status": "completed",
+      "type": "sell"
+    },
+    {
+      "amount": {
+        "amount": "-0.20000000",
+        "currency": "BTC"
+      },
+      "created_at": "2025-12-20T12:00:00Z",
+      "id": "30000000-0000-0000-0000-000000000009",
+      "native_amount": {
+        "amount": "-9000.00",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000001/transactions/30000000-0000-0000-0000-000000000009",
+      "status": "completed",
+      "type": "pro_deposit"
+    },
+    {
+      "amount": {
+        "amount": "0.30000000",
+        "currency": "BTC"
+      },
+      "created_at": "2025-12-01T12:00:00Z",
+      "id": "30000000-0000-0000-0000-000000000010",
+      "native_amount": {
+        "amount": "12000.00",
+        "currency": "USD"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000001/transactions/30000000-0000-0000-0000-000000000010",
+      "status": "completed",
+      "type": "exchange_withdrawal"
+    },
+    {
+      "amount": {
+        "amount": "-0.00100000",
+        "currency": "BTC"
+      },
+      "created_at": "2025-11-11T13:13:35Z",
+      "description": "Sample memo",
+      "id": "30000000-0000-0000-0000-000000000011",
+      "idem": "70000000-0000-0000-0000-000000000001",
+      "native_amount": {
+        "amount": "-50.00",
+        "currency": "USD"
+      },
+      "network": {
+        "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "network_name": "bitcoin",
+        "status": "confirmed",
+        "transaction_fee": {
+          "amount": "0.00001000",
+          "currency": "BTC"
+        }
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000001/transactions/30000000-0000-0000-0000-000000000011",
+      "status": "completed",
+      "to": {
+        "address": "bc1qdummy000000000000000000000000000000",
+        "resource": "address"
+      },
+      "type": "send"
+    },
+    {
+      "amount": {
+        "amount": "0.02000000",
+        "currency": "BTC"
+      },
+      "created_at": "2025-11-05T10:10:10Z",
+      "from": {
+        "id": "50000000-0000-0000-0000-000000000001",
+        "name": "Sample Sender",
+        "resource": "user"
+      },
+      "id": "30000000-0000-0000-0000-000000000012",
+      "native_amount": {
+        "amount": "1000.00",
+        "currency": "USD"
+      },
+      "network": {
+        "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "network_name": "bitcoin",
+        "status": "confirmed"
+      },
+      "resource": "transaction",
+      "resource_path": "/v2/accounts/20000000-0000-0000-0000-000000000001/transactions/30000000-0000-0000-0000-000000000012",
+      "status": "completed",
+      "type": "send"
+    }
+  ]
+}

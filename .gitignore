@@ -1,0 +1,9 @@
+/target
+.twapp-*
+# Raw API captures never enter the repo — scrubbed fixtures only. A Coinbase
+# response can carry account ids, balances, addresses, and transaction hashes.
+/captures
+# CDP API key files as downloaded from the portal. The private key inside is a
+# working credential; it belongs in the keychain, never on disk in a repo.
+cdp_api_key*.json
+*.pem

@@ -1,0 +1,59 @@
+[package]
+name = "coinbase-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Coinbase accounts and transaction history from the command line — Keychain-secured, agent-friendly. Read-only. Unofficial."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/piekstra/coinbase-cli"
+homepage = "https://github.com/piekstra/coinbase-cli"
+readme = "README.md"
+keywords = ["coinbase", "crypto", "cost-basis", "tax", "cli"]
+categories = ["command-line-utilities"]
+
+[lib]
+name = "cbase"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cbase"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+serde = { version = "1", features = ["derive"] }
+# preserve_order keeps DTO fields and table columns in the order the code builds
+# them, rather than alphabetized by serde_json's default map ordering.
+serde_json = { version = "1", features = ["preserve_order"] }
+pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0", features = ["reqwest"] }
+pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
+pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
+pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
+pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
+pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
+pk-cli-utility = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+
+# --- CDP JWT signing -------------------------------------------------------
+# Coinbase authenticates every request with a short-lived JWT signed by the CDP
+# API key. Both key types Coinbase issues are supported, so a key minted before
+# or after their Ed25519 switch works: ES256 over a PEM EC P-256 key, and EdDSA
+# over an Ed25519 key. The JWT is assembled by hand (src/jwt.rs) rather than
+# with `jsonwebtoken`, because Coinbase requires a `nonce` field in the JOSE
+# *header* and that crate's `Header` struct has no room for non-standard header
+# parameters.
+p256 = { version = "0.14", default-features = false, features = ["std", "ecdsa", "pem", "pkcs8"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "fast", "pkcs8", "zeroize"] }
+sha2 = "0.11"
+base64 = "0.23"
+rand = "0.10"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"

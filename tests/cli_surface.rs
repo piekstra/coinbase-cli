@@ -18,6 +18,10 @@ use predicates::str::contains;
 fn cbase() -> Command {
     let mut cmd = Command::cargo_bin("cbase").expect("binary builds");
     cmd.env("CBASE_KEYCHAIN_SERVICE", "piekstra.cbase.hermetic-tests");
+    // A key in the developer's environment would win over the empty
+    // keychain service and send requests for real.
+    cmd.env_remove("CBASE_API_KEY_NAME");
+    cmd.env_remove("CBASE_API_PRIVATE_KEY");
     cmd
 }
 
@@ -29,6 +33,7 @@ const COMMANDS: &[&str] = &[
     "accounts",
     "transactions",
     "api",
+    "mcp",
     "self-update",
     "completions",
     "info",
@@ -140,7 +145,7 @@ fn info_reports_the_cli_contract() {
     // from `info` needs to know that the setup step is different.
     assert_eq!(v["auth"]["method"], "api-key");
     let caps = v["capabilities"].as_array().unwrap();
-    for expected in ["accounts", "transactions", "api"] {
+    for expected in ["accounts", "transactions", "api", "mcp"] {
         assert!(
             caps.iter().any(|c| c == expected),
             "capabilities missing {expected}"
@@ -294,9 +299,71 @@ fn a_read_without_a_credential_exits_three_with_the_fix_in_the_message() {
     assert_eq!(v["error"]["code"], "auth");
     let msg = v["error"]["message"].as_str().unwrap();
     assert!(
-        msg.contains("set-credential"),
+        msg.contains("auth login") || msg.contains("set-credential"),
         "an auth error must name the command that fixes it, got: {msg}"
     );
+}
+
+/// Half a key in the environment is exit 3 naming the missing variable, never
+/// a silent fall-back to whatever the keychain holds.
+#[test]
+fn half_an_environment_key_exits_three_naming_the_missing_variable() {
+    let out = cbase()
+        .env("CBASE_API_KEY_NAME", "organizations/o/apiKeys/k")
+        .args(["accounts", "list", "--json"])
+        .assert()
+        .code(3);
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("CBASE_API_PRIVATE_KEY"), "{msg}");
+}
+
+/// A variable that is set but not UTF-8 is not "unset": falling back to the
+/// keychain would sign with a key the caller did not choose.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_environment_key_exits_three_naming_the_variable() {
+    use std::os::unix::ffi::OsStrExt;
+    let out = cbase()
+        .env(
+            "CBASE_API_KEY_NAME",
+            std::ffi::OsStr::from_bytes(b"organizations/\xff"),
+        )
+        .env("CBASE_API_PRIVATE_KEY", "x")
+        .args(["accounts", "list", "--json"])
+        .assert()
+        .code(3);
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("CBASE_API_KEY_NAME") && msg.contains("UTF-8"),
+        "{msg}"
+    );
+}
+
+/// A whole key in the environment is what `auth status` reports, with no
+/// request made (no `--verify`) and the keychain service still empty.
+#[test]
+fn auth_status_reports_a_key_from_the_environment() {
+    use p256::elliptic_curve::Generate as _;
+    let pem = p256::SecretKey::generate_from_rng(&mut rand::rng())
+        .to_sec1_pem(p256::pkcs8::LineEnding::LF)
+        .expect("PEM encodes")
+        .to_string();
+    let out = cbase()
+        .env(
+            "CBASE_API_KEY_NAME",
+            "organizations/00000000-0000-0000-0000-000000000000/apiKeys/11111111-1111-1111-1111-111111111111",
+        )
+        // As a single-line settings field delivers it.
+        .env("CBASE_API_PRIVATE_KEY", pem.replace('\n', " "))
+        .args(["auth", "status", "--json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(v["authenticated"], true, "{v}");
+    assert_eq!(v["credential_in_keychain"], false, "{v}");
+    assert!(v["username"].as_str().unwrap().ends_with("1111"), "{v}");
 }
 
 /// Exactly one JSON document per invocation (SPEC v1 §1.4) — an error path that

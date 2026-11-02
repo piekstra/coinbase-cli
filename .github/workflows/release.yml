@@ -1,17 +1,36 @@
 name: release
 
-# Cut a release by pushing a tag like `v0.1.0`. Cross-platform artifacts live
-# here rather than in per-push CI, so the expensive macOS runner is billed once
-# per release instead of once per commit. One Linux job and ONE macOS job
-# (Apple Silicon, which cross-compiles the Intel target — the macOS SDK is
-# universal). Jobs are independent (fail-fast: false) and each attaches its own
-# assets, so a slow or dead macOS queue can never block the Linux assets.
+# Cut a release by pushing a tag like `v0.2.0`. Cross-platform artifacts live
+# here rather than in per-push CI, so the expensive macOS runner (about 10x
+# Linux) and the Windows runner (about 2x) are billed once per release
+# instead of once per commit. One job per OS: Linux, Windows, and ONE macOS
+# job (Apple Silicon, which cross-compiles the Intel target; the macOS SDK is
+# universal). Build jobs are independent (fail-fast: false) and each attaches
+# its own tarballs, so a slow or dead macOS queue never blocks the Linux
+# assets. The `.mcpb` (Claude Desktop extension) needs all three, so it is
+# packed last, on Linux.
+#
+# Only `publish`, which runs on a tag alone and runs no third-party build
+# code, can write to the repository; building and packing (cargo, npx)
+# happen with a read-only token that checkout does not persist.
+#
+# A pull request that changes how releases are built runs every job but
+# `publish` as a dry run: everything is built and packed, nothing is
+# attached to a release.
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "packaging/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -27,25 +46,131 @@ jobs:
           - os: ubuntu-latest
             name: linux x86_64
             targets: "x86_64-unknown-linux-gnu"
+          - os: windows-latest
+            name: windows x86_64
+            targets: "x86_64-pc-windows-msvc"
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux build deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       # Asset names are the contract `cbase self-update` resolves against:
-      # <bin>-<target>.tar.gz plus a sibling .sha256.
+      # <bin>-<target>.tar.gz plus a sibling .sha256. The bare binaries also
+      # go to bin/<target>/ for the .mcpb job.
       - name: Build and package each target
         run: |
+          set -euo pipefail
+          sha256() { if command -v shasum >/dev/null; then shasum -a 256 "$1"; else sha256sum "$1"; fi; }
           for t in ${{ matrix.targets }}; do
             rustup target add "$t"
-            cargo build --release --target "$t"
-            tar -C "target/$t/release" -czf "cbase-$t.tar.gz" cbase
-            shasum -a 256 "cbase-$t.tar.gz" > "cbase-$t.tar.gz.sha256"
+            cargo build --release --locked --target "$t"
+            exe=cbase
+            case "$t" in *windows*) exe=cbase.exe ;; esac
+            tar -C "target/$t/release" -czf "cbase-$t.tar.gz" "$exe"
+            sha256 "cbase-$t.tar.gz" > "cbase-$t.tar.gz.sha256"
+            mkdir -p "bin/$t"
+            cp "target/$t/release/$exe" "bin/$t/"
           done
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      # Claude Desktop picks a binary by OS, not by CPU, so the .mcpb carries
+      # one universal macOS binary.
+      - name: Universal macOS binary
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p bin/universal-apple-darwin
+          lipo -create -output bin/universal-apple-darwin/cbase \
+            bin/aarch64-apple-darwin/cbase bin/x86_64-apple-darwin/cbase
+          lipo -info bin/universal-apple-darwin/cbase
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: bin-${{ runner.os }}
+          path: bin/
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ runner.os }}
+          path: |
             cbase-*.tar.gz
             cbase-*.tar.gz.sha256
+          retention-days: 3
+          if-no-files-found: error
+
+  mcpb:
+    name: pack the Claude Desktop extension
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: bin
+          merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The manifest's version must be the crate's, and on a tag the tag's,
+      # or Claude Desktop would show one version and run another.
+      - name: Assemble, validate and pack
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          manifest_version=$(jq -r .version packaging/mcpb/manifest.json)
+          if [ "$manifest_version" != "$version" ]; then
+            echo "packaging/mcpb/manifest.json is $manifest_version but Cargo.toml is $version" >&2
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+          stage="$RUNNER_TEMP/cbase"
+          mkdir -p "$stage/server/linux"
+          cp packaging/mcpb/manifest.json LICENSE-MIT LICENSE-APACHE "$stage/"
+          cp bin/universal-apple-darwin/cbase "$stage/server/cbase"
+          cp bin/x86_64-pc-windows-msvc/cbase.exe "$stage/server/cbase.exe"
+          cp bin/x86_64-unknown-linux-gnu/cbase "$stage/server/linux/cbase"
+          # Artifacts drop the executable bit; the .mcpb keeps what it is given.
+          chmod +x "$stage/server/cbase" "$stage/server/linux/cbase"
+          npx -y @anthropic-ai/mcpb@2.1.2 validate "$stage/manifest.json"
+          npx -y @anthropic-ai/mcpb@2.1.2 pack "$stage" "cbase-$version.mcpb"
+          sha256sum "cbase-$version.mcpb" > "cbase-$version.mcpb.sha256"
+          unzip -Z "cbase-$version.mcpb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-mcpb
+          path: cbase-*.mcpb*
+          retention-days: 7
+          if-no-files-found: error
+
+  # Attaches whatever was built, even when one OS failed, so a dead macOS
+  # queue still leaves the Linux and Windows tarballs on the release.
+  publish:
+    name: attach to the release
+    needs: [build, mcpb]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/cbase-*.tar.gz
+            dist/cbase-*.tar.gz.sha256
+            dist/cbase-*.mcpb
+            dist/cbase-*.mcpb.sha256

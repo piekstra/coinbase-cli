@@ -29,6 +29,128 @@ use serde::Deserialize;
 use crate::config::KEYCHAIN_ACCOUNT;
 use crate::jwt::Signer;
 
+/// The CDP API key's name (`organizations/<org>/apiKeys/<key>`, or a bare key
+/// id), for a run that takes its key from the environment rather than the
+/// keychain. Claude Desktop's `.mcpb` passes its `sensitive` settings this way.
+pub const ENV_KEY_NAME: &str = "CBASE_API_KEY_NAME";
+
+/// The CDP private key that goes with [`ENV_KEY_NAME`]: the PEM, or an Ed25519
+/// key's base64.
+pub const ENV_PRIVATE_KEY: &str = "CBASE_API_PRIVATE_KEY";
+
+/// Where the key in use came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySource {
+    /// [`ENV_KEY_NAME`] and [`ENV_PRIVATE_KEY`].
+    Env,
+    /// The OS keychain (`piekstra.cbase`, account `api-key`).
+    Keychain,
+}
+
+/// The key to sign with: the environment first, then the keychain (the
+/// family's precedence, DESIGN.md §1.7). With both variables set the keychain
+/// is never opened, so a host that passes the key in the environment (a
+/// Claude Desktop extension) raises no keychain prompt at all.
+pub fn resolve_key(creds: &CredentialStore) -> Result<Option<(Secret, KeySource)>, CliError> {
+    if let Some(key) = key_from_env()? {
+        return Ok(Some((key, KeySource::Env)));
+    }
+    Ok(read_stored_key(creds)?.map(|k| (k, KeySource::Keychain)))
+}
+
+/// The key from [`ENV_KEY_NAME`] + [`ENV_PRIVATE_KEY`], as the same JSON blob
+/// the keychain holds, or `None` when neither is set. One without the other is
+/// an auth error naming the missing one: falling back to the keychain would
+/// sign with a key the caller did not choose.
+pub fn key_from_env() -> Result<Option<Secret>, CliError> {
+    key_from_vars(env_value(ENV_KEY_NAME)?, env_value(ENV_PRIVATE_KEY)?)
+}
+
+/// A variable that is set but not UTF-8 is an auth error naming it, not
+/// "unset": treating it as unset would fall through to the keychain.
+fn env_value(name: &str) -> Result<Option<String>, CliError> {
+    match std::env::var(name) {
+        Ok(v) => Ok(Some(v)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(CliError::Auth(format!(
+            "{name} is set but is not valid UTF-8; set it to the value from the CDP key file"
+        ))),
+    }
+}
+
+fn key_from_vars(
+    name: Option<String>,
+    private_key: Option<String>,
+) -> Result<Option<Secret>, CliError> {
+    let present = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+    match (present(&name), present(&private_key)) {
+        (false, false) => Ok(None),
+        (true, false) => Err(CliError::Auth(format!(
+            "{ENV_KEY_NAME} is set but {ENV_PRIVATE_KEY} is not — set both to use a key from the \
+             environment, or neither to use the keychain"
+        ))),
+        (false, true) => Err(CliError::Auth(format!(
+            "{ENV_PRIVATE_KEY} is set but {ENV_KEY_NAME} is not — set both to use a key from the \
+             environment, or neither to use the keychain"
+        ))),
+        (true, true) => {
+            let blob = serde_json::json!({
+                "name": name.unwrap_or_default().trim(),
+                "privateKey": normalize_private_key(&private_key.unwrap_or_default()),
+            });
+            Ok(Some(Secret::new(blob.to_string())))
+        }
+    }
+}
+
+/// Undo what a settings field does to a multi-line PEM: a value copied out of
+/// the key's JSON file carries literal `\n` escapes, and a single-line text
+/// box turns the line breaks into spaces. Either way the header, the base64
+/// body and the footer are recovered and the body re-wrapped at 64 columns. An
+/// Ed25519 key (bare base64) only loses surrounding whitespace.
+fn normalize_private_key(raw: &str) -> String {
+    let unescaped = raw.trim().replace("\\n", "\n");
+    let Some(begin) = unescaped.find("-----BEGIN ") else {
+        return unescaped;
+    };
+    let Some(header_end) = unescaped[begin + 11..]
+        .find("-----")
+        .map(|i| begin + 11 + i + 5)
+    else {
+        return unescaped;
+    };
+    let Some(footer) = unescaped[header_end..]
+        .find("-----END ")
+        .map(|i| header_end + i)
+    else {
+        return unescaped;
+    };
+    let footer_end = unescaped[footer + 9..]
+        .find("-----")
+        .map(|i| footer + 9 + i + 5)
+        .unwrap_or(unescaped.len());
+    let header = &unescaped[begin..header_end];
+    let body: Vec<char> = unescaped[header_end..footer]
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    // Base64 is ASCII. Anything else (a pasted smart quote) is not a PEM this
+    // can repair: hand it on unchanged, for the parser to reject as it is.
+    if !body.iter().all(char::is_ascii_graphic) {
+        return unescaped;
+    }
+    let footer = &unescaped[footer..footer_end];
+    let mut pem = String::from(header);
+    pem.push('\n');
+    for line in body.chunks(64) {
+        pem.extend(line);
+        pem.push('\n');
+    }
+    pem.push_str(footer);
+    pem.push('\n');
+    pem
+}
+
 /// Read the stored key, mapping an unusable keychain onto the auth contract.
 ///
 /// `pk-cli-secrets` reports a missing or locked backend as `CliError::Keychain`
@@ -262,6 +384,57 @@ mod tests {
         assert!(!masked.contains("abc"));
         assert!(!masked.contains("dead"));
         assert_eq!(mask_key_id("abcdefgh"), "…efgh");
+    }
+
+    /// The two ways a settings field mangles a PEM, plus the clean one: all
+    /// three must parse to the same working key.
+    #[test]
+    fn a_private_key_from_the_environment_survives_settings_fields() {
+        let pem = throwaway_pem();
+        let escaped = pem.replace('\n', "\\n");
+        let one_line = pem.replace('\n', " ");
+        for raw in [pem.clone(), escaped, one_line] {
+            let blob = key_from_vars(Some("organizations/o/apiKeys/k".into()), Some(raw.clone()))
+                .expect("both set")
+                .expect("a key");
+            let c = Credential::parse(blob.expose())
+                .unwrap_or_else(|e| panic!("{raw:?} did not parse: {e}"));
+            assert_eq!(c.signer().algorithm(), "ES256");
+            assert_eq!(c.key_id, "organizations/o/apiKeys/k");
+        }
+    }
+
+    #[test]
+    fn a_pem_with_non_ascii_in_its_body_is_passed_on_unchanged() {
+        let pem = throwaway_pem().replacen("\n", "\n\u{201c}", 2);
+        assert_eq!(normalize_private_key(&pem), pem.trim());
+        let blob = key_from_vars(Some("organizations/o/apiKeys/k".into()), Some(pem))
+            .unwrap()
+            .unwrap();
+        assert!(Credential::parse(blob.expose()).is_err());
+    }
+
+    #[test]
+    fn an_ed25519_key_from_the_environment_is_only_trimmed() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let b64 = base64_std(&key.to_keypair_bytes());
+        assert_eq!(normalize_private_key(&format!("  {b64}\n")), b64);
+    }
+
+    #[test]
+    fn half_an_environment_key_is_an_auth_error_naming_the_missing_half() {
+        assert!(key_from_vars(None, None).unwrap().is_none());
+        assert!(key_from_vars(Some(" ".into()), Some(String::new()))
+            .unwrap()
+            .is_none());
+        match key_from_vars(Some("organizations/o/apiKeys/k".into()), None) {
+            Err(CliError::Auth(m)) => assert!(m.contains(ENV_PRIVATE_KEY), "{m}"),
+            other => panic!("expected an auth error, got {other:?}"),
+        }
+        match key_from_vars(None, Some("x".into())) {
+            Err(CliError::Auth(m)) => assert!(m.contains(ENV_KEY_NAME), "{m}"),
+            other => panic!("expected an auth error, got {other:?}"),
+        }
     }
 
     fn base64_std(bytes: &[u8]) -> String {

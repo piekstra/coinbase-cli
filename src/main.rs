@@ -19,6 +19,7 @@ use cbase::client::Coinbase;
 use cbase::commands::{accounts, api, transactions, Ctx, ACCOUNTS};
 use cbase::config::{self, Config, KEYCHAIN_ACCOUNT};
 use cbase::credential::{self, Credential};
+use cbase::mcp::{CoinbaseTools, LiveSource};
 
 const BIN: &str = "cbase";
 const REPO: &str = "piekstra/coinbase-cli";
@@ -51,6 +52,8 @@ enum Command {
     Transactions(transactions::Cmd),
     /// Raw Coinbase API passthrough (GET only — this CLI is read-only).
     Api(ApiArgs),
+    /// Serve balances and ledgers to Claude and other MCP clients over stdio.
+    Mcp(pk_cli_mcp::McpArgs),
     /// Update to the latest release from GitHub.
     SelfUpdate(SelfUpdateArgs),
     /// Print a shell completion script.
@@ -131,6 +134,11 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Accounts(cmd) => accounts::run(&ctx, cmd),
         Command::Transactions(cmd) => transactions::run(&ctx, cmd),
         Command::Api(args) => api::run(&ctx, args),
+        Command::Mcp(args) => {
+            let creds = CredentialStore::new(creds.service());
+            let source = LiveSource::new(cfg.clone(), creds, cli.common.verbose);
+            pk_cli_mcp::run(args, CoinbaseTools::new(source, cfg.account()))
+        }
         Command::SelfUpdate(args) => Updater {
             repo: REPO.into(),
             binary: BIN.into(),
@@ -159,7 +167,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
                         "{BIN} auth set-credential --stdin < cdp_api_key.json"
                     )),
                 },
-                &["accounts", "transactions", "api"],
+                &["accounts", "transactions", "api", "mcp"],
             );
             output::json(&serde_json::to_value(&info).unwrap());
             Ok(())
@@ -299,15 +307,30 @@ fn status(
     // the one command a driver uses to decide "do I need to log in?" the
     // command that can't answer.
     let (stored, keychain_note) = credential::peek_stored_key(creds);
-    let parsed = stored
+    let in_keychain = stored.is_some();
+    // The environment wins over the keychain for every request (DESIGN.md
+    // §1.7), so status reports the key requests will actually use.
+    let (in_use, source_note) = match credential::key_from_env() {
+        Ok(Some(key)) => (
+            Some(key),
+            Some(format!(
+                "using the key from {} and {}; requests do not read the keychain",
+                credential::ENV_KEY_NAME,
+                credential::ENV_PRIVATE_KEY
+            )),
+        ),
+        Ok(None) => (stored, keychain_note),
+        Err(e) => (None, Some(e.to_string())),
+    };
+    let parsed = in_use
         .as_ref()
         .and_then(|s| Credential::parse(s.expose()).ok());
 
     // A stored key is necessary but not sufficient — Coinbase can revoke it
     // server-side. Only --verify proves it, and only --verify costs a request.
     let (authenticated, note) = match (&parsed, args.verify) {
-        (None, _) => (false, keychain_note),
-        (Some(_), false) => (true, None),
+        (None, _) => (false, source_note),
+        (Some(_), false) => (true, source_note),
         (Some(_), true) => match verify(cfg, creds) {
             Ok(()) => (true, Some("key verified against Coinbase".to_string())),
             Err(CliError::Auth(m)) => (false, Some(m)),
@@ -319,7 +342,7 @@ fn status(
     let mut st = AuthStatus::new(true, authenticated, pk_cli_auth::AuthMethod::Password);
     st.username = parsed.as_ref().map(|c| c.masked_key_id());
     st.account = cfg.account();
-    st.credential_in_keychain = Some(stored.is_some());
+    st.credential_in_keychain = Some(in_keychain);
     if args.verify {
         st.session_valid = Some(authenticated);
     }

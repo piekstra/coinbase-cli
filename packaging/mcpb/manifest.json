@@ -1,0 +1,81 @@
+{
+  "manifest_version": "0.3",
+  "name": "cbase",
+  "display_name": "Coinbase (cbase)",
+  "version": "0.1.1",
+  "description": "Read-only access to your own Coinbase balances and transaction history, through the open-source cbase CLI.",
+  "long_description": "Ask Claude about your Coinbase wallets: what you hold, and what happened in a wallet over a period (buys, sells, sends, converts, staking and other reward income). Two read-only tools, coinbase_accounts and coinbase_transactions; nothing can trade, send or change your account. Your Coinbase Developer Platform API key stays on your computer: Claude Desktop keeps it in its own secure store and passes it to the bundled cbase binary, which calls Coinbase directly. Create a key with only the View permission at portal.cdp.coinbase.com. Unofficial; not affiliated with Coinbase.",
+  "author": {
+    "name": "piekstra",
+    "url": "https://github.com/piekstra"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/piekstra/coinbase-cli"
+  },
+  "homepage": "https://github.com/piekstra/coinbase-cli",
+  "documentation": "https://github.com/piekstra/coinbase-cli#use-with-claude",
+  "support": "https://github.com/piekstra/coinbase-cli/issues",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["coinbase", "crypto", "finance", "transactions", "read-only"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/cbase",
+    "mcp_config": {
+      "command": "${__dirname}/server/cbase",
+      "args": ["mcp"],
+      "env": {
+        "CBASE_API_KEY_NAME": "${user_config.api_key_name}",
+        "CBASE_API_PRIVATE_KEY": "${user_config.api_private_key}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/cbase.exe",
+          "args": ["mcp"],
+          "env": {
+            "CBASE_API_KEY_NAME": "${user_config.api_key_name}",
+            "CBASE_API_PRIVATE_KEY": "${user_config.api_private_key}"
+          }
+        },
+        "linux": {
+          "command": "${__dirname}/server/linux/cbase",
+          "args": ["mcp"],
+          "env": {
+            "CBASE_API_KEY_NAME": "${user_config.api_key_name}",
+            "CBASE_API_PRIVATE_KEY": "${user_config.api_private_key}"
+          }
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "coinbase_accounts",
+      "description": "Your Coinbase wallets and their balances."
+    },
+    {
+      "name": "coinbase_transactions",
+      "description": "One wallet's transactions over a period: buys, sells, sends, converts and reward income."
+    }
+  ],
+  "tools_generated": false,
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"]
+  },
+  "user_config": {
+    "api_key_name": {
+      "type": "string",
+      "title": "CDP API key name",
+      "description": "The key's name from the Coinbase Developer Platform, organizations/<org>/apiKeys/<key> (an Ed25519 key's id also works). Create the key with only the View permission.",
+      "sensitive": true,
+      "required": true
+    },
+    "api_private_key": {
+      "type": "string",
+      "title": "CDP API private key",
+      "description": "The key's privateKey, as in the JSON file Coinbase gave you. Paste it as it is: the \\n escapes or the line breaks both work.",
+      "sensitive": true,
+      "required": true
+    }
+  }
+}

@@ -18,7 +18,7 @@ pub const DEFAULT_BASE_URL: &str = "https://api.coinbase.com";
 
 pub const KNOWN_KEYS: &[&str] = &["base_url", "account"];
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// Override the API host (for a proxy or a replay fixture server).
     #[serde(skip_serializing_if = "Option::is_none")]

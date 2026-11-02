@@ -45,19 +45,29 @@ Practical consequences:
 | `src/config.rs` | Non-secret settings |
 | `src/parse.rs` | Coinbase JSON → DTOs |
 | `src/commands/` | One module per command group |
+| `src/mcp.rs` | `cbase mcp`: the MCP tools (`coinbase_accounts`, `coinbase_transactions`) over the same client and DTOs, behind the `Source` seam |
+| `packaging/mcpb/manifest.json` | The Claude Desktop extension manifest; the release workflow packs `cbase-<version>.mcpb` from it |
 | `tests/cli_surface.rs` | Black-box: help, exit codes, the read-only guard |
 | `tests/fixture_shapes.rs` | Contract tests over `tests/fixtures/` |
+| `tests/mcp_tools.rs` | Every MCP tool in process over the fixtures, plus cli-common's conformance check |
+| `tests/mcp_stdio.rs` | The real `cbase mcp` binary driven over stdio |
+| `tests/packaging.rs` | The `.mcpb` manifest against the code: version, tools, env vars |
 
 ## Non-negotiables
 
 **Read-only, enforced in three places that must agree.** `client::Coinbase`
 exposes no verb but `GET`; `commands::api` refuses everything else with exit 6;
 the README and this file say so. Adding a write means changing all three in one
-commit — and reconsidering whether this tool should do it at all.
+commit — and reconsidering whether this tool should do it at all. The MCP tools
+are `ToolDef::read`s over the same client; a write tool would also have to be
+its own `ToolDef::write` (never mixed into a read), and none may move money.
 
-**The private key is a secret.** Keychain only (`piekstra.cbase`, account
+**The private key is a secret.** Keychain (`piekstra.cbase`, account
 `api-key`), ingested via `--stdin`/`--from-env`, never argv, never a file in the
-repo, never a log line. `Credential` has a hand-written `Debug` so a stray
+repo, never a log line. The one other source is the environment pair
+`CBASE_API_KEY_NAME` + `CBASE_API_PRIVATE_KEY` (`credential::resolve_key`),
+which wins over the keychain and is how the Claude Desktop extension passes
+the key from its own secure store; half a pair is exit 3, never a fall-back. `Credential` has a hand-written `Debug` so a stray
 `{:?}` can't leak it — don't derive `Debug` over key material.
 
 **No key material in the repo.** Tests that need a key generate a throwaway one
@@ -67,6 +77,12 @@ at runtime. There must never be a `.pem` in `tests/fixtures/`.
 validates its arguments first, so `--help` and bad input never prompt, hang, or
 spend a request. The exit-code tests in `tests/cli_surface.rs` exist to catch a
 regression here.
+
+**MCP tools never sign in.** A tool call never prompts, never starts a login
+and never creates a keychain item; a missing or rejected key is an `auth`
+error telling the model to have the user run `cbase auth login` in a terminal.
+`tools/list` touches no credential: the key is read on the first call and
+kept for the life of the server.
 
 **Exactly one JSON document per invocation.** `auth status --verify` emits its
 DTO then calls `std::process::exit` directly rather than returning an error,
@@ -125,7 +141,8 @@ points it at a service that holds nothing, so the exit-3 cases stay true even
 on a machine with a real key stored — without it, `cargo test` opens the
 developer's actual credential from an ad-hoc-signed binary (a macOS approval
 prompt per rebuild) and then hits Coinbase for real. Found the hard way on the
-first live run.
+first live run. `tests/mcp_tools.rs` reaches no client at all: it runs the
+tools over a fixture `Source`.
 
 ## Working with the live credential
 
@@ -134,7 +151,10 @@ A real View-only key lives in the keychain (`piekstra.cbase`) since
 so the keychain grant sticks); reinstall after every fix — a stale
 `~/.cargo/bin/cbase` will happily serve old behavior. Prefer
 `cbase api GET <path>` over curl for exploration: it exercises the real
-signing path. `docs/api.md` §5 lists what is still unverified. Never paste
+signing path. `docs/api.md` §5 lists what is still unverified. To dogfood the
+MCP tools, drive the installed `cbase mcp` over stdio with JSON-RPC lines
+(`initialize`, `tools/list`, `tools/call`); `cbase mcp --list-tools` prints
+the definitions without a credential. Never paste
 real output into fixtures un-scrubbed; `tests/fixtures/README.md` has the
 policy.
 

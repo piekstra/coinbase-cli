@@ -16,7 +16,11 @@ their wallet balances and full transaction history. What's worth protecting:
   Read at point of use, parsed in memory, never logged, never on argv, never
   written to disk by this tool. `Credential` implements `Debug` by hand
   precisely so a stray `{:?}` cannot print key material, and the key id is
-  masked (`organizations/…/…4f2a`) wherever it is displayed.
+  masked (`organizations/…/…4f2a`) wherever it is displayed. A host with its
+  own secure store (the Claude Desktop extension) passes the key instead as
+  `CBASE_API_KEY_NAME` and `CBASE_API_PRIVATE_KEY`; with both set the
+  keychain is never opened, and with only one set the call fails (exit 3)
+  rather than fall back to a different key.
 - **The minted JWTs.** Held for the duration of a single request, never
   persisted, never logged — `--verbose` prints the method, path, and query
   parameters, never the `Authorization` header. Each token lives 120 seconds and

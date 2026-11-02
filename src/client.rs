@@ -10,7 +10,7 @@
 //! and are bound to one method+path, so there is nothing worth caching.
 
 use pk_cli_core::CliError;
-use pk_cli_secrets::CredentialStore;
+use pk_cli_secrets::{CredentialStore, Secret};
 use serde_json::Value;
 
 use crate::config::Config;
@@ -46,19 +46,21 @@ pub struct Coinbase {
 }
 
 impl Coinbase {
-    /// Build a client from the key in the OS keychain.
+    /// Build a client from the key in the environment
+    /// ([`crate::credential::ENV_KEY_NAME`] + `ENV_PRIVATE_KEY`), else the OS
+    /// keychain.
     ///
     /// A missing key is [`CliError::Auth`] (exit 3) with the command that fixes
     /// it, so a driver can branch on the exit code instead of parsing prose.
     pub fn new(cfg: &Config, creds: &CredentialStore, verbose: bool) -> Result<Self, CliError> {
-        let stored = crate::credential::read_stored_key(creds)?.ok_or_else(|| {
-            CliError::Auth(
-                "no Coinbase CDP API key stored — create one at https://portal.cdp.coinbase.com \
-                 and run `cbase auth set-credential --stdin < cdp_api_key.json`"
-                    .into(),
-            )
-        })?;
-        let cred = Credential::parse(stored.expose())?;
+        let (key, _) = crate::credential::resolve_key(creds)?.ok_or_else(missing_key)?;
+        Self::with_key(cfg, &key, verbose)
+    }
+
+    /// Build a client from an already-read key blob (the JSON the keychain
+    /// holds), so a long-running caller reads the keychain once.
+    pub fn with_key(cfg: &Config, key: &Secret, verbose: bool) -> Result<Self, CliError> {
+        let cred = Credential::parse(key.expose())?;
         let base_url = cfg.base_url();
         let host = host_of(&base_url);
         Ok(Self {
@@ -162,6 +164,16 @@ impl Coinbase {
         collected.truncate(target);
         Ok(collected)
     }
+}
+
+/// The exit-3 error for "no key anywhere", naming both ways to provide one.
+pub fn missing_key() -> CliError {
+    CliError::Auth(format!(
+        "no Coinbase CDP API key stored — create one at https://portal.cdp.coinbase.com and run \
+         `cbase auth login --stdin < cdp_api_key.json`, or set {} and {}",
+        crate::credential::ENV_KEY_NAME,
+        crate::credential::ENV_PRIVATE_KEY
+    ))
 }
 
 /// The v2 pagination cursor for the next page, or `None` on the last one.

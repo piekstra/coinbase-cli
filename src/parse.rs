@@ -106,7 +106,7 @@ pub struct CryptoTransaction {
 /// the **commission**, and a Form 8949 cost basis that omits fees is wrong.
 /// Coinbase documents the commission as always denominated in the quote
 /// currency of `product_id`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FillDetail {
     /// e.g. `BTC-USD`.
     #[serde(skip_serializing_if = "Option::is_none")]

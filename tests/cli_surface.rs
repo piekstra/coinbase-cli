@@ -318,6 +318,29 @@ fn half_an_environment_key_exits_three_naming_the_missing_variable() {
     assert!(msg.contains("CBASE_API_PRIVATE_KEY"), "{msg}");
 }
 
+/// A variable that is set but not UTF-8 is not "unset": falling back to the
+/// keychain would sign with a key the caller did not choose.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_environment_key_exits_three_naming_the_variable() {
+    use std::os::unix::ffi::OsStrExt;
+    let out = cbase()
+        .env(
+            "CBASE_API_KEY_NAME",
+            std::ffi::OsStr::from_bytes(b"organizations/\xff"),
+        )
+        .env("CBASE_API_PRIVATE_KEY", "x")
+        .args(["accounts", "list", "--json"])
+        .assert()
+        .code(3);
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("CBASE_API_KEY_NAME") && msg.contains("UTF-8"),
+        "{msg}"
+    );
+}
+
 /// A whole key in the environment is what `auth status` reports, with no
 /// request made (no `--verify`) and the keychain service still empty.
 #[test]

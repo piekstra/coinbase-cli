@@ -10,8 +10,13 @@ name: release
 # assets. The `.mcpb` (Claude Desktop extension) needs all three, so it is
 # packed last, on Linux.
 #
-# A pull request that changes how releases are built runs every job as a dry
-# run: everything is built and packed, nothing is attached to a release.
+# Only `publish`, which runs on a tag alone and runs no third-party build
+# code, can write to the repository; building and packing (cargo, npx)
+# happen with a read-only token that checkout does not persist.
+#
+# A pull request that changes how releases are built runs every job but
+# `publish` as a dry run: everything is built and packed, nothing is
+# attached to a release.
 on:
   push:
     tags: ["v*"]
@@ -31,8 +36,6 @@ jobs:
   build:
     name: build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -51,6 +54,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux build deps
         if: runner.os == 'Linux'
@@ -87,22 +92,23 @@ jobs:
           path: bin/
           retention-days: 3
           if-no-files-found: error
-      - name: Upload to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: dist-${{ runner.os }}
+          path: |
             cbase-*.tar.gz
             cbase-*.tar.gz.sha256
+          retention-days: 3
+          if-no-files-found: error
 
   mcpb:
     name: pack the Claude Desktop extension
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           pattern: bin-*
@@ -140,14 +146,31 @@ jobs:
           unzip -Z "cbase-$version.mcpb"
       - uses: actions/upload-artifact@v4
         with:
-          name: mcpb
+          name: dist-mcpb
           path: cbase-*.mcpb*
           retention-days: 7
           if-no-files-found: error
-      - name: Upload to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+
+  # Attaches whatever was built, even when one OS failed, so a dead macOS
+  # queue still leaves the Linux and Windows tarballs on the release.
+  publish:
+    name: attach to the release
+    needs: [build, mcpb]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - uses: softprops/action-gh-release@v2
         with:
           files: |
-            cbase-*.mcpb
-            cbase-*.mcpb.sha256
+            dist/cbase-*.tar.gz
+            dist/cbase-*.tar.gz.sha256
+            dist/cbase-*.mcpb
+            dist/cbase-*.mcpb.sha256

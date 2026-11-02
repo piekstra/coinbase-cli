@@ -63,10 +63,19 @@ pub fn resolve_key(creds: &CredentialStore) -> Result<Option<(Secret, KeySource)
 /// an auth error naming the missing one: falling back to the keychain would
 /// sign with a key the caller did not choose.
 pub fn key_from_env() -> Result<Option<Secret>, CliError> {
-    key_from_vars(
-        std::env::var(ENV_KEY_NAME).ok(),
-        std::env::var(ENV_PRIVATE_KEY).ok(),
-    )
+    key_from_vars(env_value(ENV_KEY_NAME)?, env_value(ENV_PRIVATE_KEY)?)
+}
+
+/// A variable that is set but not UTF-8 is an auth error naming it, not
+/// "unset": treating it as unset would fall through to the keychain.
+fn env_value(name: &str) -> Result<Option<String>, CliError> {
+    match std::env::var(name) {
+        Ok(v) => Ok(Some(v)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(CliError::Auth(format!(
+            "{name} is set but is not valid UTF-8; set it to the value from the CDP key file"
+        ))),
+    }
 }
 
 fn key_from_vars(
@@ -121,15 +130,20 @@ fn normalize_private_key(raw: &str) -> String {
         .map(|i| footer + 9 + i + 5)
         .unwrap_or(unescaped.len());
     let header = &unescaped[begin..header_end];
-    let body: String = unescaped[header_end..footer]
+    let body: Vec<char> = unescaped[header_end..footer]
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect();
+    // Base64 is ASCII. Anything else (a pasted smart quote) is not a PEM this
+    // can repair: hand it on unchanged, for the parser to reject as it is.
+    if !body.iter().all(char::is_ascii_graphic) {
+        return unescaped;
+    }
     let footer = &unescaped[footer..footer_end];
     let mut pem = String::from(header);
     pem.push('\n');
-    for chunk in body.as_bytes().chunks(64) {
-        pem.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+    for line in body.chunks(64) {
+        pem.extend(line);
         pem.push('\n');
     }
     pem.push_str(footer);
@@ -388,6 +402,16 @@ mod tests {
             assert_eq!(c.signer().algorithm(), "ES256");
             assert_eq!(c.key_id, "organizations/o/apiKeys/k");
         }
+    }
+
+    #[test]
+    fn a_pem_with_non_ascii_in_its_body_is_passed_on_unchanged() {
+        let pem = throwaway_pem().replacen("\n", "\n\u{201c}", 2);
+        assert_eq!(normalize_private_key(&pem), pem.trim());
+        let blob = key_from_vars(Some("organizations/o/apiKeys/k".into()), Some(pem))
+            .unwrap()
+            .unwrap();
+        assert!(Credential::parse(blob.expose()).is_err());
     }
 
     #[test]

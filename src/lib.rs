@@ -8,10 +8,12 @@
 //! writes to a Coinbase account. The `api` passthrough refuses every verb but
 //! `GET` for that reason. That claim is enforced in
 //! [`commands::api`] and must change in the same commit as any first write.
+//! The MCP tools in [`mcp`] are reads over the same client.
 
 pub mod client;
 pub mod commands;
 pub mod config;
 pub mod credential;
 pub mod jwt;
+pub mod mcp;
 pub mod parse;

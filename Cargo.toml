@@ -26,13 +26,16 @@ serde = { version = "1", features = ["derive"] }
 # preserve_order keeps DTO fields and table columns in the order the code builds
 # them, rather than alphabetized by serde_json's default map ordering.
 serde_json = { version = "1", features = ["preserve_order"] }
-pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0", features = ["reqwest"] }
-pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
-pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
-pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
-pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
-pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
-pk-cli-utility = { git = "https://github.com/piekstra/cli-common", tag = "v0.4.0" }
+pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0", features = ["reqwest"] }
+pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
+pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
+pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
+pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
+pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
+pk-cli-utility = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
+# `cbase mcp`: the MCP profile's tools over the same commands (DESIGN.md §1.9).
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0", features = ["stdio"] }
+schemars = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # --- CDP JWT signing -------------------------------------------------------
@@ -50,6 +53,8 @@ base64 = "0.23"
 rand = "0.10"
 
 [dev-dependencies]
+# The MCP profile's conformance checks, for the tests only.
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0", features = ["test-util"] }
 assert_cmd = "2"
 predicates = "3"
 

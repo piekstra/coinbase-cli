@@ -69,7 +69,7 @@ fn zero_filtered_limit(all: bool, limit: Option<u32>) -> Option<u32> {
 
 /// True for `"0"`, `"0.00000000"`, `"-0.0"`, and friends — without parsing a
 /// float, which would round a dust balance to zero and hide it.
-fn is_zero(amount: &str) -> bool {
+pub fn is_zero(amount: &str) -> bool {
     let s = amount.trim().trim_start_matches(['+', '-']);
     !s.is_empty() && s.chars().all(|c| c == '0' || c == '.')
 }

@@ -7,16 +7,10 @@ Coinbase.
 
 Conforms to the [`piekstra-cli` spec v1](https://github.com/piekstra/cli-common).
 
-> **Status: v0.1.0, built and tested offline. Never run against a real
-> Coinbase account.** No authenticated call has ever been made and no account
-> data has ever been read by this tool. Every test runs against fixtures
-> hand-authored from Coinbase's published API documentation, and the plumbing is
-> unit-tested end to end (including signing a JWT and verifying it against its
-> own public key). Two *unauthenticated* probes confirmed the transport and the
-> error mapping — but a 401 can't tell a malformed token from an unknown key, so
-> the JWT construction itself is still unproven. See
-> [`docs/api.md` §5](docs/api.md) for the checklist the first real run should
-> work through.
+> **Status: live-verified.** The first authenticated run against a real
+> Coinbase account (2026-08-13) confirmed the JWT signing, the response shapes
+> and the traps recorded in [`docs/api.md` §5](docs/api.md); the tests run
+> offline against scrubbed captures from that run.
 
 ## Install
 
@@ -89,6 +83,7 @@ $ cbase transactions list --account <UUID>
 $ cbase transactions list --account <UUID> --since 2026-01-01 --until 2026-12-31
 $ cbase transactions list --limit 20 --json
 $ cbase api GET /v2/accounts                    # raw passthrough (GET only)
+$ cbase mcp                                     # serve the tools to Claude over stdio
 $ cbase info                                    # machine-readable capabilities
 ```
 
@@ -104,6 +99,7 @@ stderr, and each JSON DTO carries a `schema` tag.
 | `accounts list` (alias `ls`, group alias `wallets`) | Wallets and balances (`crypto-account-list/v1`) |
 | `transactions list` (alias `ls`) | One wallet's ledger (`crypto-transaction-list/v1`) |
 | `api GET <PATH>` | Raw API passthrough, **GET only** |
+| `mcp [--list-tools]` | MCP server over stdio for Claude and other MCP clients (see [Use with Claude](#use-with-claude)) |
 | `self-update [--check] [-y]` | Update from GitHub releases (`self-update/v1`) |
 | `completions <shell>` | Shell completion script |
 | `info` | Capability discovery (`cli-info/v1`) |
@@ -112,6 +108,52 @@ stderr, and each JSON DTO carries a `schema` tag.
 
 `0` ok · `2` usage · `3` auth required or key rejected · `4` not found ·
 `5` upstream/Coinbase error or rate limit · `6` refused (a write was attempted)
+
+## Use with Claude
+
+`cbase mcp` serves two read-only tools over MCP, so Claude can answer
+questions about your own Coinbase account. There is no hosted service: the
+tools run on your computer, in your copy of `cbase`, and call Coinbase
+directly with your key.
+
+| Tool | Answers |
+| --- | --- |
+| `coinbase_accounts` | What do I hold? Wallets and balances; empty wallets on request |
+| `coinbase_transactions` | What happened in a wallet? One wallet's ledger, by wallet name, currency code or id, narrowed by `since`/`until` dates and transaction `types` (`rewards` for all reward income) |
+
+Results are concise by default (`response_format: "detailed"` adds ids, fees
+and fill detail), 25 records a page with a cursor for more, and never larger
+than about 32,000 characters. Memos in transactions come from other people;
+the server tells Claude to treat them as data, not instructions.
+
+**Claude Code.** Install `cbase` and store a key (above), then either add
+the `coinbase-cli` plugin from the
+[piekstra plugin marketplace](https://github.com/piekstra/claude-plugins):
+
+```console
+$ claude plugin marketplace add piekstra/claude-plugins
+$ claude plugin install coinbase-cli@piekstra-plugins
+```
+
+or register the server yourself:
+
+```console
+$ claude mcp add coinbase -- cbase mcp
+```
+
+**Claude Desktop.** Download `cbase-<version>.mcpb` from the
+[latest release](https://github.com/piekstra/coinbase-cli/releases/latest)
+and open it. Claude Desktop asks for the key's name and private key (the two
+values in the JSON file Coinbase gave you), keeps them in its own secure
+store, and passes them to the bundled binary as `CBASE_API_KEY_NAME` and
+`CBASE_API_PRIVATE_KEY`. No separate install and no keychain are involved.
+
+**claude.ai on the web and mobile.** Coming: a connector you deploy to your
+own free Cloudflare account, so the key stays in an account you control.
+
+Any other MCP client that launches a local server can run `cbase mcp`. If the
+key is missing or rejected, the tools say so and ask you to run `cbase auth
+login` in a terminal; they never sign in by themselves.
 
 ## Read-only, enforced in code
 
@@ -122,6 +164,7 @@ promise in a README — it is a property of the code:
   method to call.
 - `cbase api` refuses every verb but `GET`, and exits **6**.
 - A View-only CDP key means Coinbase would refuse a write anyway.
+- The MCP tools are reads over the same client, annotated read-only.
 
 All three must change together, in the same commit, before this tool ever
 writes anything.
@@ -145,9 +188,12 @@ Full details and citations: [`docs/api.md` §1](docs/api.md).
 
 ## Security
 
-The CDP private key lives **only** in the OS keychain (service
-`piekstra.cbase`, account `api-key`), is read at point of use, and is never
-logged, never written to disk by this tool, and never accepted on argv. See
+The CDP private key lives in the OS keychain (service `piekstra.cbase`,
+account `api-key`), is read at point of use, and is never logged, never
+written to disk by this tool, and never accepted on argv. A host that keeps
+the key in its own secure store (Claude Desktop) passes it instead as two
+environment variables, `CBASE_API_KEY_NAME` and `CBASE_API_PRIVATE_KEY`;
+when both are set the keychain is not read at all. See
 [SECURITY.md](SECURITY.md).
 
 ## Development

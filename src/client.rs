@@ -20,7 +20,7 @@ use pk_cli_core::CliError;
 use serde_json::Value;
 
 use crate::credential::Credential;
-use crate::jwt::{self, Signer};
+use crate::jwt;
 
 /// Coinbase API paths the reads share.
 pub const ACCOUNTS: &str = "/v2/accounts";
@@ -50,16 +50,52 @@ pub const CB_VERSION: &str = "2022-01-06";
 /// default 25). Asking for the maximum minimizes round trips.
 pub const MAX_PAGE: u32 = 100;
 
+/// What a token needs from the platform besides the transport: a clock, a
+/// CSPRNG for its nonce, and somewhere to note a signer fallback. Chosen by
+/// the composition root: [`Platform::system`] for the binary, the Worker's
+/// host in the module (`worker::client`). `SystemTime::now()` panics on
+/// `wasm32-unknown-unknown`, and its OS random source needs `wasm-bindgen`.
+#[derive(Debug, Clone, Copy)]
+pub struct Platform {
+    /// Seconds since the Unix epoch.
+    pub now_secs: fn() -> u64,
+    /// Fill the buffer from a CSPRNG.
+    pub fill_random: fn(&mut [u8]),
+    /// A diagnostic line that is not an error.
+    pub warn: fn(&str),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Platform {
+    /// The operating system's clock and random source; warnings to stderr.
+    pub fn system() -> Self {
+        Self {
+            now_secs: || {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            },
+            fill_random: |buf| {
+                use rand::Rng as _;
+                rand::rng().fill_bytes(buf);
+            },
+            warn: |line| eprintln!("warning: {line}"),
+        }
+    }
+}
+
 /// The Coinbase v2 client over any transport: blocking reqwest natively, the
 /// Worker's `fetch` and WebCrypto in the module. Signs every request with a
 /// fresh CDP JWT, by the transport's platform signer when it has one.
 pub struct Coinbase<T> {
     transport: T,
+    platform: Platform,
     base_url: String,
     host: String,
     cred: Credential,
     verbose: bool,
-    cli_hints: bool,
+    rejected_key_hint: Option<&'static str>,
 }
 
 #[cfg(feature = "native")]
@@ -87,28 +123,38 @@ impl Coinbase<pk_cli_http::BlockingTransport> {
         verbose: bool,
     ) -> Result<Self, CliError> {
         let transport = pk_cli_http::BlockingTransport::new()?;
-        let mut client =
-            Self::with_transport(Credential::parse(key.expose())?, &cfg.base_url(), transport);
+        let mut client = Self::with_transport(
+            Credential::parse(key.expose())?,
+            &cfg.base_url(),
+            transport,
+            Platform::system(),
+        );
         client.verbose = verbose;
-        client.cli_hints = true;
+        client.rejected_key_hint = Some("check it with `cbase auth status --verify`");
         Ok(client)
     }
 }
 
 impl<T: Transport + PlatformSigner> Coinbase<T> {
-    /// A client over any transport, from a parsed key. Error messages name
-    /// no `cbase` command: the Worker builds its client this way, where the
-    /// key lives in the Worker's secrets, not a keychain.
-    pub fn with_transport(cred: Credential, base_url: &str, transport: T) -> Self {
+    /// A client over any transport and platform, from a parsed key. Error
+    /// messages name no `cbase` command: the Worker builds its client this
+    /// way, where the key lives in the Worker's secrets, not a keychain.
+    pub fn with_transport(
+        cred: Credential,
+        base_url: &str,
+        transport: T,
+        platform: Platform,
+    ) -> Self {
         let base_url = base_url.trim_end_matches('/').to_string();
         let host = host_of(&base_url);
         Self {
             transport,
+            platform,
             base_url,
             host,
             cred,
             verbose: false,
-            cli_hints: false,
+            rejected_key_hint: None,
         }
     }
 
@@ -153,36 +199,28 @@ impl<T: Transport + PlatformSigner> Coinbase<T> {
             eprintln!("GET {}{path} {query:?}", self.base_url);
         }
         let resp = self.transport.send(req).await?;
-        response_json(resp.status, &resp.body, self.cli_hints)
+        response_json(resp.status, &resp.body, self.rejected_key_hint)
     }
 
-    /// Mint the per-request JWT. An ES256 signature goes to the transport
-    /// first: in the Worker that is WebCrypto, native code well under the
-    /// free plan's 10 ms of CPU per request where WebAssembly P-256 is not.
+    /// Mint the per-request JWT, ES256 by the transport's platform signer
+    /// when it has one ([`jwt::mint`]).
     async fn token(&self, method: &str, path: &str) -> Result<String, CliError> {
-        let signer = self.cred.signer();
-        let input = jwt::signing_input(
-            signer.algorithm(),
-            &self.cred.key_id,
+        let nonce = jwt::nonce(self.platform.fill_random);
+        let claims = jwt::Claims {
+            key_id: &self.cred.key_id,
             method,
-            &self.host,
+            host: &self.host,
             path,
-            jwt::now_secs(),
-            &jwt::nonce(),
-        )?;
-        // The platform's signer when the transport has one (WebCrypto in the
-        // Worker, a fraction of the CPU of signing in WebAssembly); this
-        // crate's own when it has none or it refuses the key, which gives
-        // the same token.
-        let platform = match (signer, self.cred.es256_pkcs8_der()) {
-            (Signer::Es256(_), Some(der)) => self.transport.sign_es256(der, input.as_bytes()).await,
-            _ => None,
+            now_secs: (self.platform.now_secs)(),
+            nonce: &nonce,
         };
-        let signature = match platform {
-            Some(Ok(sig)) => sig,
-            Some(Err(_)) | None => signer.sign(input.as_bytes()),
-        };
-        Ok(jwt::assemble(&input, &signature))
+        jwt::mint(
+            self.cred.signer(),
+            &self.transport,
+            &claims,
+            self.platform.warn,
+        )
+        .await
     }
 
     /// Follow a v2 list endpoint's cursor until `limit` records are collected
@@ -313,9 +351,14 @@ fn host_of(base_url: &str) -> String {
 ///    deserialization error instead of "your key was rejected". So the body is
 ///    read as text first and JSON is only attempted opportunistically.
 ///
-/// `cli_hints` adds the `cbase` command that checks the key to a 401; the
-/// Worker leaves it out, where no terminal is involved.
-pub fn response_json(status: u16, body: &str, cli_hints: bool) -> Result<Value, CliError> {
+/// `rejected_key_hint` finishes a 401's message: the binary names the `cbase`
+/// command that checks the key; the Worker, where no terminal is involved,
+/// gives none.
+pub fn response_json(
+    status: u16,
+    body: &str,
+    rejected_key_hint: Option<&str>,
+) -> Result<Value, CliError> {
     let parsed: Option<Value> = serde_json::from_str(body).ok();
 
     if (200..300).contains(&status) {
@@ -333,10 +376,10 @@ pub fn response_json(status: u16, body: &str, cli_hints: bool) -> Result<Value, 
     };
 
     Err(match status {
-        401 if cli_hints => CliError::Auth(say(
-            "Coinbase rejected the API key — check it with `cbase auth status --verify`",
-        )),
-        401 => CliError::Auth(say("Coinbase rejected the API key")),
+        401 => CliError::Auth(say(&match rejected_key_hint {
+            Some(hint) => format!("Coinbase rejected the API key — {hint}"),
+            None => "Coinbase rejected the API key".to_string(),
+        })),
         403 => CliError::Auth(say(
             "Coinbase refused the request; the API key is probably missing the read permission \
              for this resource",
@@ -392,20 +435,84 @@ mod tests {
 
     #[test]
     fn a_rejected_key_names_the_cli_check_only_for_the_cli() {
-        let msg = |hints| match response_json(401, "Unauthorized", hints) {
+        let msg = |hint| match response_json(401, "Unauthorized", hint) {
             Err(CliError::Auth(m)) => m,
             other => panic!("{other:?}"),
         };
-        assert!(msg(true).contains("`cbase auth status --verify`"));
-        assert_eq!(msg(false), "Coinbase rejected the API key (HTTP 401)");
+        assert_eq!(
+            msg(Some("check it with `cbase auth status --verify`")),
+            "Coinbase rejected the API key — check it with `cbase auth status --verify` (HTTP 401)"
+        );
+        assert_eq!(msg(None), "Coinbase rejected the API key (HTTP 401)");
         assert!(matches!(
-            response_json(200, "not json", false),
+            response_json(200, "not json", None),
             Err(CliError::Upstream(_))
         ));
         assert_eq!(
-            response_json(200, r#"{"data":[]}"#, false).unwrap(),
+            response_json(200, r#"{"data":[]}"#, None).unwrap(),
             json!({"data": []})
         );
+    }
+
+    /// A transport that never sends and has no platform signer: enough to
+    /// build a signed request.
+    struct Offline;
+
+    impl Transport for Offline {
+        async fn send(
+            &self,
+            _: HttpRequest,
+        ) -> Result<pk_cli_core::transport::HttpResponse, CliError> {
+            Err(CliError::Upstream("offline".into()))
+        }
+    }
+
+    impl PlatformSigner for Offline {
+        async fn sign_es256(&self, _: &[u8], _: &[u8]) -> Option<Result<Vec<u8>, CliError>> {
+            None
+        }
+    }
+
+    /// The token's time and nonce come from the platform the composition
+    /// root chose, not from ambient calls.
+    #[test]
+    fn the_token_takes_its_clock_and_nonce_from_the_platform() {
+        use base64::Engine as _;
+        use p256::elliptic_curve::Generate as _;
+        let pem = p256::SecretKey::generate_from_rng(&mut rand::rng())
+            .to_sec1_pem(p256::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let blob = json!({"name": "organizations/o/apiKeys/k", "privateKey": pem}).to_string();
+        let platform = Platform {
+            now_secs: || 1_700_000_000,
+            fill_random: |buf| buf.fill(0xab),
+            warn: |line| panic!("unexpected warning: {line}"),
+        };
+        let client = Coinbase::with_transport(
+            Credential::parse(&blob).unwrap(),
+            "https://api.coinbase.com/",
+            Offline,
+            platform,
+        );
+        let req = pk_cli_core::block_on(client.request(ACCOUNTS, &[])).unwrap();
+        let token = req
+            .header_value("Authorization")
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap();
+        let part = |i: usize| -> Value {
+            let b64 = token.split('.').nth(i).unwrap();
+            serde_json::from_slice(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .decode(b64)
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(part(0)["nonce"], "ab".repeat(16));
+        assert_eq!(part(1)["nbf"], 1_700_000_000u64);
+        assert_eq!(part(1)["exp"], 1_700_000_000u64 + jwt::LIFETIME_SECS);
+        assert_eq!(part(1)["uri"], "GET api.coinbase.com/v2/accounts");
     }
 
     #[test]

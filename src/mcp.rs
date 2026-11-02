@@ -98,8 +98,8 @@ mod live {
     use pk_cli_secrets::{CredentialStore, Secret};
     use serde_json::Value;
 
-    use super::Source;
-    use crate::client::{account_transactions, missing_key, Coinbase, ACCOUNTS};
+    use super::{ClientSource, Source};
+    use crate::client::{missing_key, Coinbase};
     use crate::config::Config;
     use crate::credential::resolve_key;
 
@@ -144,16 +144,15 @@ mod live {
         }
     }
 
-    /// The blocking transport's futures finish on their first poll: the
-    /// stdio server polls each call on its own blocking thread with no Tokio
+    /// The provider mapping is [`ClientSource`]'s, the Worker's too; this
+    /// adds only where the key comes from and when to forget it. The
+    /// blocking transport's futures finish on their first poll: the stdio
+    /// server polls each call on its own blocking thread with no Tokio
     /// reactor (pk-cli-mcp's `Toolset` contract), which is where
     /// `reqwest::blocking` belongs.
     impl Source for LiveSource {
         async fn accounts(&self) -> Result<Vec<Value>, CliError> {
-            let out = match self.client() {
-                Ok(c) => c.get_all(ACCOUNTS, &[], None).await,
-                Err(e) => Err(e),
-            };
+            let out = ClientSource::new(self.client()).accounts().await;
             self.forget_rejected(out)
         }
 
@@ -162,13 +161,9 @@ mod live {
             account_id: &str,
             limit: Option<u32>,
         ) -> Result<Vec<Value>, CliError> {
-            let out = match self.client() {
-                Ok(c) => {
-                    c.get_all(&account_transactions(account_id), &[], limit)
-                        .await
-                }
-                Err(e) => Err(e),
-            };
+            let out = ClientSource::new(self.client())
+                .transactions(account_id, limit)
+                .await;
             self.forget_rejected(out)
         }
     }

@@ -21,9 +21,6 @@
 //! cannot print key material.
 
 use std::fmt;
-use std::sync::OnceLock;
-
-use zeroize::Zeroizing;
 
 use pk_cli_core::CliError;
 #[cfg(feature = "native")]
@@ -225,8 +222,8 @@ fn keychain_unavailable(msg: &str) -> String {
 /// A parsed CDP API key: the id that goes in the JWT's `kid`/`sub`, and a
 /// signer over the private half.
 ///
-/// `Clone`, so the Worker module parses a key once per isolate and hands each
-/// call a copy.
+/// `Clone`, so the Worker module parses a key once per isolate (parsing a
+/// P-256 key derives its public point) and hands each call a copy.
 #[derive(Clone)]
 pub struct Credential {
     /// The key identifier. Either the full
@@ -234,9 +231,6 @@ pub struct Credential {
     /// exactly as Coinbase issued it — it is echoed into the JWT untouched.
     pub key_id: String,
     signer: Signer,
-    /// The EC key as PKCS#8 DER for a platform signer, made on first use
-    /// (it costs a scalar multiplication) and wiped on drop.
-    es256_der: OnceLock<Option<Zeroizing<Vec<u8>>>>,
 }
 
 /// The on-disk/on-keychain JSON, with the field aliases Coinbase's own
@@ -296,21 +290,11 @@ impl Credential {
         Ok(Self {
             key_id,
             signer: Signer::from_private_key(&private_key)?,
-            es256_der: OnceLock::new(),
         })
     }
 
     pub fn signer(&self) -> &Signer {
         &self.signer
-    }
-
-    /// The private key as PKCS#8 DER when it is an EC key, for the
-    /// transport's platform signer (WebCrypto in the Worker).
-    pub fn es256_pkcs8_der(&self) -> Option<&[u8]> {
-        self.es256_der
-            .get_or_init(|| self.signer.es256_pkcs8_der().map(Zeroizing::new))
-            .as_deref()
-            .map(Vec::as_slice)
     }
 
     /// The key id with the CDP organization UUID masked, for display. The id
@@ -494,7 +478,7 @@ mod tests {
             .unwrap();
         let c = Credential::parse(&blob).unwrap();
         assert_eq!(c.key_id, "organizations/o/apiKeys/k");
-        assert!(c.es256_pkcs8_der().is_some());
+        assert_eq!(c.signer().algorithm(), "ES256");
         assert!(key_from_parts(None, Some("  ")).unwrap().is_none());
         match key_from_parts(Some("k"), None) {
             Err(CliError::Auth(m)) => {

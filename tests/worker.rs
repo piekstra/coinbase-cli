@@ -13,7 +13,8 @@ use p256::ecdsa::signature::{Signer as _, Verifier as _};
 use p256::elliptic_curve::Generate as _;
 use p256::pkcs8::DecodePrivateKey as _;
 use pk_cli_core::transport::{HttpRequest, HttpResponse};
-use pk_cli_mcp::wasm::testing::{call, describe, Asked, Reply};
+use pk_cli_mcp::wasm::testing::{call, describe, take_logs, Asked, Reply};
+use pk_cli_mcp::wasm::Level;
 use serde_json::{json, Value};
 
 const KEY_NAME: &str = "organizations/00000000-0000-0000-0000-000000000000/apiKeys/11111111-1111-1111-1111-111111111111";
@@ -60,7 +61,8 @@ fn b64(part: &str) -> Vec<u8> {
 
 /// The CDP JWT on `req`, checked the way Coinbase checks it: ES256 under
 /// `public`, `kid` = `sub` = the key name, `uri` the path without its query,
-/// a nonce never seen before. Returns the `uri` claim.
+/// valid from now (the Worker's clock) for two minutes, a 128-bit nonce never
+/// seen before. Returns the `uri` claim.
 fn verify_jwt(
     req: &HttpRequest,
     public: &p256::ecdsa::VerifyingKey,
@@ -82,7 +84,16 @@ fn verify_jwt(
     assert_eq!(header["kid"], KEY_NAME);
     assert_eq!(claims["sub"], KEY_NAME);
     assert_eq!(claims["iss"], "cdp");
-    assert!(nonces.insert(header["nonce"].as_str().unwrap().to_string()));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let nbf = claims["nbf"].as_u64().unwrap();
+    assert!(nbf.abs_diff(now) <= 5, "nbf {nbf}, now {now}");
+    assert_eq!(claims["exp"].as_u64(), Some(nbf + 120));
+    let nonce = header["nonce"].as_str().unwrap();
+    assert_eq!(nonce.len(), 32, "{nonce}");
+    assert!(nonces.insert(nonce.to_string()));
     assert_eq!(req.header_value("CB-VERSION"), Some("2022-01-06"));
     assert_eq!(
         req.header_value("User-Agent"),
@@ -141,14 +152,18 @@ fn accounts_walk_both_pages_with_tokens_the_platform_signs() {
     assert_eq!(uris, ["GET api.coinbase.com/v2/accounts"; 2]);
 }
 
-/// A Worker without WebCrypto ECDSA (or one that refuses the key) leaves the
-/// module to sign in WebAssembly; the token is just as valid.
+/// A Worker without WebCrypto ECDSA, one that refuses the key, or one that
+/// answers with something other than a 64-byte `r || s` leaves the module to
+/// sign in WebAssembly; the token is just as valid. Only a platform that
+/// tried and failed is worth a line in the Worker's log.
 #[test]
 fn the_module_signs_itself_when_the_platform_cannot() {
-    for refusal in [
-        Reply::Unsupported,
-        Reply::Failed("DataError: bad key".into()),
+    for (refusal, warns) in [
+        (Reply::Unsupported, false),
+        (Reply::Failed("DataError: bad key".into()), true),
+        (Reply::Signature(vec![0x30; 70]), true),
     ] {
+        take_logs();
         let (pem, public) = dummy_ec_key();
         let mut nonces = HashSet::new();
         let out = call(
@@ -168,7 +183,53 @@ fn the_module_signs_itself_when_the_platform_cannot() {
             },
         );
         assert_eq!(out["result"]["isError"], false, "{out}");
+        let warnings: Vec<String> = take_logs()
+            .into_iter()
+            .filter(|(level, _)| *level == Level::Warn)
+            .map(|(_, line)| line)
+            .collect();
+        assert_eq!(!warnings.is_empty(), warns, "{refusal:?}: {warnings:?}");
+        assert!(
+            warnings.iter().all(|w| w.contains("signing in-process")),
+            "{warnings:?}"
+        );
     }
+}
+
+/// The isolate keeps the last key it parsed: the same key again is served
+/// from it, a rotated key is parsed afresh (never the old one's signer), and
+/// a key that fails to parse is not kept.
+#[test]
+fn a_rotated_key_signs_with_the_new_key() {
+    let (first, first_public) = dummy_ec_key();
+    let (second, second_public) = dummy_ec_key();
+    let accounts = |pem: &str, public: &p256::ecdsa::VerifyingKey| {
+        let mut nonces = HashSet::new();
+        call(
+            tools,
+            json!({"name": "coinbase_accounts", "arguments": {}}),
+            config(pem),
+            |asked| match asked {
+                Asked::SignEs256 { .. } => Reply::Unsupported,
+                Asked::Fetch(req) => {
+                    verify_jwt(&req, public, &mut nonces);
+                    accounts_page(&req)
+                }
+            },
+        )
+    };
+    for (pem, public) in [
+        (&first, &first_public),
+        (&first, &first_public),
+        (&second, &second_public),
+    ] {
+        let out = accounts(pem, public);
+        assert_eq!(out["result"]["isError"], false, "{out}");
+    }
+    let out = accounts("not a key", &second_public);
+    assert_eq!(out["result"]["isError"], true, "{out}");
+    let out = accounts(&second, &second_public);
+    assert_eq!(out["result"]["isError"], false, "{out}");
 }
 
 #[test]

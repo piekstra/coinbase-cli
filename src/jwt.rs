@@ -34,8 +34,10 @@
 //! <https://docs.cdp.coinbase.com/coinbase-app/authentication-authorization/api-key-authentication>
 
 use base64::Engine;
+use pk_cli_core::transport::PlatformSigner;
 use pk_cli_core::CliError;
 use serde_json::json;
+use zeroize::Zeroizing;
 
 /// How long a minted token is valid. Coinbase rejects tokens with a longer
 /// window.
@@ -143,14 +145,20 @@ impl Signer {
     }
 
     /// The EC key as PKCS#8 DER, for a platform signer (WebCrypto's
-    /// `importKey("pkcs8", …)`). `None` for an Ed25519 key.
-    pub fn es256_pkcs8_der(&self) -> Option<Vec<u8>> {
-        use p256::pkcs8::EncodePrivateKey;
+    /// `importKey("pkcs8", …)`), wiped on drop. `None` for an Ed25519 key.
+    ///
+    /// The scalar alone, without the optional public key, so this is a copy
+    /// and not a scalar multiplication: the platform derives the public half
+    /// on import, natively.
+    pub fn es256_pkcs8_der(&self) -> Option<Zeroizing<Vec<u8>>> {
         match self {
-            Signer::Es256(k) => p256::SecretKey::from(k.as_nonzero_scalar())
-                .to_pkcs8_der()
-                .ok()
-                .map(|der| der.as_bytes().to_vec()),
+            Signer::Es256(k) => {
+                let scalar: Zeroizing<[u8; 32]> = Zeroizing::new(k.to_bytes().into());
+                let mut der = Zeroizing::new(Vec::with_capacity(P256_PKCS8_PREFIX.len() + 32));
+                der.extend_from_slice(&P256_PKCS8_PREFIX);
+                der.extend_from_slice(scalar.as_slice());
+                Some(der)
+            }
             Signer::EdDsa(_) => None,
         }
     }
@@ -172,56 +180,82 @@ impl Signer {
     }
 }
 
-/// Mint a bearer token for one request.
+/// What a token says besides its key: the request it is for, when, and its
+/// nonce.
 ///
 /// `method` is the upper-case HTTP verb, `host` the bare API host (no scheme),
 /// and `path` the path with a leading slash and **no query string** — Coinbase
 /// builds the `uri` claim from the path alone, so including `?limit=…` makes
 /// the token fail to validate.
-pub fn mint(
+#[derive(Debug, Clone, Copy)]
+pub struct Claims<'a> {
+    pub key_id: &'a str,
+    pub method: &'a str,
+    pub host: &'a str,
+    pub path: &'a str,
+    /// Seconds since the Unix epoch: `nbf`, and `exp` after [`LIFETIME_SECS`].
+    pub now_secs: u64,
+    pub nonce: &'a str,
+}
+
+/// An ES256 JWS signature: `r || s`, 32 bytes each.
+pub const ES256_SIGNATURE_LEN: usize = 64;
+
+/// Mint a bearer token for one request.
+///
+/// An ES256 signature is asked of `platform` first (WebCrypto in the Worker,
+/// native code where WebAssembly P-256 would cost most of a request's CPU).
+/// When the platform has no signer (`None`), fails, or answers with anything
+/// but a 64-byte `r || s`, this crate signs instead: the token is equally
+/// valid. `warn` hears why when the platform tried and the answer was unusable.
+/// EdDSA is always signed here.
+pub async fn mint(
     signer: &Signer,
-    key_id: &str,
-    method: &str,
-    host: &str,
-    path: &str,
-    now_secs: u64,
-    nonce: &str,
+    platform: &impl PlatformSigner,
+    claims: &Claims<'_>,
+    warn: fn(&str),
 ) -> Result<String, CliError> {
-    let input = signing_input(
-        signer.algorithm(),
-        key_id,
-        method,
-        host,
-        path,
-        now_secs,
-        nonce,
-    )?;
-    Ok(assemble(&input, &signer.sign(input.as_bytes())))
+    let input = signing_input(signer, claims)?;
+    let asked = match signer.es256_pkcs8_der() {
+        Some(der) => platform.sign_es256(&der, input.as_bytes()).await,
+        None => None,
+    };
+    let signature = match asked {
+        Some(Ok(sig)) if sig.len() == ES256_SIGNATURE_LEN => sig,
+        Some(Ok(sig)) => {
+            warn(&format!(
+                "the platform's ES256 signature was {} bytes, not {ES256_SIGNATURE_LEN}; \
+                 signing in-process instead",
+                sig.len()
+            ));
+            signer.sign(input.as_bytes())
+        }
+        Some(Err(e)) => {
+            warn(&format!(
+                "the platform could not sign ES256 ({e}); signing in-process instead"
+            ));
+            signer.sign(input.as_bytes())
+        }
+        None => signer.sign(input.as_bytes()),
+    };
+    Ok(assemble(&input, &signature))
 }
 
 /// The JWS signing input, `base64url(header).base64url(claims)`: everything
-/// but the signature, so a platform signer can produce that part.
-pub fn signing_input(
-    alg: &str,
-    key_id: &str,
-    method: &str,
-    host: &str,
-    path: &str,
-    now_secs: u64,
-    nonce: &str,
-) -> Result<String, CliError> {
-    let uri = uri_claim(method, host, path);
+/// but the signature. The header's `alg` is `signer`'s.
+pub fn signing_input(signer: &Signer, c: &Claims<'_>) -> Result<String, CliError> {
+    let uri = uri_claim(c.method, c.host, c.path);
     let header = json!({
-        "alg": alg,
+        "alg": signer.algorithm(),
         "typ": "JWT",
-        "kid": key_id,
-        "nonce": nonce,
+        "kid": c.key_id,
+        "nonce": c.nonce,
     });
     let claims = json!({
-        "sub": key_id,
+        "sub": c.key_id,
         "iss": ISSUER,
-        "nbf": now_secs,
-        "exp": now_secs + LIFETIME_SECS,
+        "nbf": c.now_secs,
+        "exp": c.now_secs + LIFETIME_SECS,
         "uri": uri,
     });
     Ok(format!(
@@ -248,34 +282,29 @@ pub fn uri_claim(method: &str, host: &str, path: &str) -> String {
     format!("{} {host}/{path}", method.to_uppercase())
 }
 
-/// A fresh 128-bit nonce as lower-case hex, from a CSPRNG: `rand`'s
-/// OS-seeded generator natively, the Worker's `crypto.getRandomValues` in the
-/// WebAssembly module. Not a plain counter: the nonce is what stops a captured
-/// token being replayed within its window.
-pub fn nonce() -> String {
+/// A fresh 128-bit nonce as lower-case hex, from `fill_random`, which must
+/// be a CSPRNG (the platform's: see `client::Platform`). Not a plain counter:
+/// the nonce is what stops a captured token being replayed within its window.
+pub fn nonce(fill_random: fn(&mut [u8])) -> String {
     let mut bytes = [0u8; 16];
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rand::Rng as _;
-        rand::rng().fill_bytes(&mut bytes);
-    }
-    #[cfg(target_arch = "wasm32")]
-    pk_cli_mcp::wasm::fill_random(&mut bytes);
+    fill_random(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Seconds since the Unix epoch: the system clock natively, the Worker's
-/// `Date.now()` in the module (`SystemTime::now()` panics on
-/// `wasm32-unknown-unknown`).
-pub fn now_secs() -> u64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    return std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    #[cfg(target_arch = "wasm32")]
-    return (pk_cli_mcp::wasm::now_ms() / 1000.0) as u64;
-}
+/// The DER of a P-256 PKCS#8 `PrivateKeyInfo` up to its 32-byte scalar
+/// (RFC 5208, RFC 5915), the `ECPrivateKey` without its optional parameters
+/// and public key.
+const P256_PKCS8_PREFIX: [u8; 35] = [
+    0x30, 0x41, // PrivateKeyInfo SEQUENCE, 65 bytes
+    0x02, 0x01, 0x00, // version 0
+    0x30, 0x13, // AlgorithmIdentifier SEQUENCE, 19 bytes
+    0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, // id-ecPublicKey
+    0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, // prime256v1
+    0x04, 0x27, // privateKey OCTET STRING, 39 bytes
+    0x30, 0x25, // ECPrivateKey SEQUENCE, 37 bytes
+    0x02, 0x01, 0x01, // version 1
+    0x04, 0x20, // privateKey OCTET STRING, 32 bytes: the scalar follows
+];
 
 fn bad_key(kind: &str, e: impl std::fmt::Display) -> CliError {
     CliError::Auth(format!("the private key is not a valid {kind} key ({e})"))
@@ -288,8 +317,77 @@ fn encode_err(e: serde_json::Error) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
+
+    use p256::ecdsa::signature::Verifier as _;
     use p256::elliptic_curve::Generate as _;
     use p256::pkcs8::EncodePrivateKey;
+
+    /// A platform with no signer of its own, as natively.
+    struct NoPlatform;
+
+    impl PlatformSigner for NoPlatform {
+        async fn sign_es256(&self, _: &[u8], _: &[u8]) -> Option<Result<Vec<u8>, CliError>> {
+            None
+        }
+    }
+
+    /// A platform that gives `answer` to every ES256 request, and counts them.
+    struct Answers(Option<Result<Vec<u8>, CliError>>, Cell<u32>);
+
+    impl PlatformSigner for Answers {
+        async fn sign_es256(&self, _: &[u8], _: &[u8]) -> Option<Result<Vec<u8>, CliError>> {
+            self.1.set(self.1.get() + 1);
+            self.0.clone()
+        }
+    }
+
+    thread_local! {
+        static WARNED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn record_warning(line: &str) {
+        WARNED.with_borrow_mut(|w| w.push(line.to_string()));
+    }
+
+    fn no_warning(line: &str) {
+        panic!("unexpected warning: {line}");
+    }
+
+    fn at(path: &str, now_secs: u64) -> Claims<'_> {
+        Claims {
+            key_id: "organizations/o/apiKeys/k",
+            method: "GET",
+            host: "api.coinbase.com",
+            path,
+            now_secs,
+            nonce: "deadbeef",
+        }
+    }
+
+    fn mint_with(
+        signer: &Signer,
+        platform: &impl PlatformSigner,
+        claims: &Claims<'_>,
+        warn: fn(&str),
+    ) -> String {
+        pk_cli_core::block_on(mint(signer, platform, claims, warn)).unwrap()
+    }
+
+    fn mint_here(signer: &Signer, claims: &Claims<'_>) -> String {
+        mint_with(signer, &NoPlatform, claims, no_warning)
+    }
+
+    fn verifies_under(pem: &str, jwt: &str) -> bool {
+        let (input, sig_b64) = jwt.rsplit_once('.').unwrap();
+        let Ok(sig) = p256::ecdsa::Signature::from_slice(&B64URL.decode(sig_b64).unwrap()) else {
+            return false;
+        };
+        let verifying = p256::ecdsa::VerifyingKey::from(&p256::ecdsa::SigningKey::from(
+            &p256::SecretKey::from_sec1_pem(pem).unwrap(),
+        ));
+        verifying.verify(input.as_bytes(), &sig).is_ok()
+    }
 
     /// A P-256 key generated fresh for each test run. Nothing key-shaped is
     /// ever committed to this repo — a PEM in the tree is both a gitleaks
@@ -324,16 +422,7 @@ mod tests {
     #[test]
     fn es256_token_has_the_header_and_claims_coinbase_requires() {
         let signer = Signer::from_private_key(&throwaway_ec_pem()).unwrap();
-        let jwt = mint(
-            &signer,
-            "organizations/o/apiKeys/k",
-            "GET",
-            "api.coinbase.com",
-            "/v2/accounts",
-            1_700_000_000,
-            "deadbeef",
-        )
-        .unwrap();
+        let jwt = mint_here(&signer, &at("/v2/accounts", 1_700_000_000));
         let (header, claims, sig) = parts(&jwt);
 
         assert_eq!(header["alg"], "ES256");
@@ -359,26 +448,11 @@ mod tests {
     fn es256_signature_verifies_against_the_public_key() {
         let pem = throwaway_ec_pem();
         let signer = Signer::from_private_key(&pem).unwrap();
-        let jwt = mint(
-            &signer,
-            "k",
-            "GET",
-            "api.coinbase.com",
-            "/v2/accounts",
-            1,
-            "n",
-        )
-        .unwrap();
-
-        let (input, sig_b64) = jwt.rsplit_once('.').unwrap();
-        let sig = p256::ecdsa::Signature::from_slice(&B64URL.decode(sig_b64).unwrap()).unwrap();
-        let verifying = p256::ecdsa::VerifyingKey::from(&p256::ecdsa::SigningKey::from(
-            &p256::SecretKey::from_sec1_pem(&pem).unwrap(),
-        ));
-        use p256::ecdsa::signature::Verifier as _;
-        verifying
-            .verify(input.as_bytes(), &sig)
-            .expect("the token verifies under its own key");
+        let jwt = mint_here(&signer, &at("/v2/accounts", 1));
+        assert!(
+            verifies_under(&pem, &jwt),
+            "the token verifies under its own key"
+        );
     }
 
     /// The 64-byte `seed || public key` blob Coinbase's Ed25519 download
@@ -392,16 +466,10 @@ mod tests {
     fn eddsa_token_is_signed_with_ed25519() {
         let signer = Signer::from_private_key(&ed25519_keypair_b64()).unwrap();
         assert_eq!(signer.algorithm(), "EdDSA");
-        let jwt = mint(
-            &signer,
-            "k",
-            "GET",
-            "api.coinbase.com",
-            "/v2/accounts",
-            1,
-            "n",
-        )
-        .unwrap();
+        // The platform is never asked for an EdDSA signature.
+        let platform = Answers(Some(Ok(vec![7; 64])), Cell::new(0));
+        let jwt = mint_with(&signer, &platform, &at("/v2/accounts", 1), no_warning);
+        assert_eq!(platform.1.get(), 0);
         let (header, _, sig) = parts(&jwt);
         assert_eq!(header["alg"], "EdDSA");
         assert_eq!(sig.len(), 64);
@@ -474,27 +542,57 @@ mod tests {
         );
     }
 
-    /// The split the Worker uses (input here, signature by WebCrypto) must
-    /// produce exactly the token `mint` does.
+    /// The header's `alg` is always the signer's own.
     #[test]
-    fn signing_input_plus_assemble_is_mint() {
-        let signer = Signer::from_private_key(&throwaway_ec_pem()).unwrap();
-        let input = signing_input("EdDSA", "k", "GET", "h", "/p", 5, "n").unwrap();
-        let (header, claims, _) = parts(&assemble(&input, &[0u8; 64]));
-        assert_eq!(header["alg"], "EdDSA");
-        assert_eq!(claims["uri"], "GET h/p");
+    fn the_signing_input_names_the_signers_algorithm() {
+        let es = Signer::from_private_key(&throwaway_ec_pem()).unwrap();
         let ed = Signer::from_private_key(&ed25519_keypair_b64()).unwrap();
-        assert_eq!(
-            mint(&ed, "k", "GET", "h", "/p", 5, "n").unwrap(),
-            assemble(&input, &ed.sign(input.as_bytes()))
-        );
-        // p256 signs deterministically (RFC 6979): the same input, the same
-        // token.
-        let es_input = signing_input("ES256", "k", "GET", "h", "/p", 5, "n").unwrap();
-        assert_eq!(
-            mint(&signer, "k", "GET", "h", "/p", 5, "n").unwrap(),
-            assemble(&es_input, &signer.sign(es_input.as_bytes()))
-        );
+        for (signer, alg) in [(&es, "ES256"), (&ed, "EdDSA")] {
+            let input = signing_input(signer, &at("/p", 5)).unwrap();
+            let (header, claims, _) = parts(&assemble(&input, &[0u8; 64]));
+            assert_eq!(header["alg"], alg);
+            assert_eq!(claims["uri"], "GET api.coinbase.com/p");
+        }
+    }
+
+    /// A 64-byte answer from the platform is the token's signature.
+    #[test]
+    fn the_platforms_es256_signature_is_used() {
+        let signer = Signer::from_private_key(&throwaway_ec_pem()).unwrap();
+        let platform = Answers(Some(Ok(vec![7; 64])), Cell::new(0));
+        let jwt = mint_with(&signer, &platform, &at("/v2/accounts", 1), no_warning);
+        assert_eq!(platform.1.get(), 1);
+        assert_eq!(parts(&jwt).2, vec![7; 64]);
+    }
+
+    /// No platform signer, a failure, or an answer that is not a 64-byte
+    /// `r || s` (DER, say, or truncated): the token is signed here and
+    /// verifies; only an unusable answer is worth a warning.
+    #[test]
+    fn the_token_is_signed_here_when_the_platforms_answer_is_unusable() {
+        for (answer, warns) in [
+            (None, false),
+            (
+                Some(Err(CliError::Upstream("DataError: bad key".into()))),
+                true,
+            ),
+            (Some(Ok(vec![0x30; 70])), true),
+            (Some(Ok(vec![7; 32])), true),
+        ] {
+            let pem = throwaway_ec_pem();
+            let signer = Signer::from_private_key(&pem).unwrap();
+            let platform = Answers(answer.clone(), Cell::new(0));
+            WARNED.take();
+            let jwt = mint_with(&signer, &platform, &at("/v2/accounts", 1), record_warning);
+            assert_eq!(platform.1.get(), 1, "{answer:?}");
+            assert!(verifies_under(&pem, &jwt), "{answer:?}");
+            let warned = WARNED.take();
+            assert_eq!(warned.len(), usize::from(warns), "{answer:?}: {warned:?}");
+            assert!(
+                warned.iter().all(|w| w.contains("signing in-process")),
+                "{warned:?}"
+            );
+        }
     }
 
     /// What WebCrypto imports: the same key, so its signatures verify under
@@ -505,6 +603,7 @@ mod tests {
         let pem = throwaway_ec_pem();
         let signer = Signer::from_private_key(&pem).unwrap();
         let der = signer.es256_pkcs8_der().expect("an EC key exports");
+        assert_eq!(der.len(), 67, "the scalar without its public point");
         let back = p256::SecretKey::from_pkcs8_der(&der).unwrap();
         assert_eq!(back, p256::SecretKey::from_sec1_pem(&pem).unwrap());
         let ed = Signer::from_private_key(&ed25519_keypair_b64()).unwrap();
@@ -513,8 +612,12 @@ mod tests {
 
     #[test]
     fn nonces_do_not_repeat() {
-        let a = nonce();
-        let b = nonce();
+        fn os_random(buf: &mut [u8]) {
+            use rand::Rng as _;
+            rand::rng().fill_bytes(buf);
+        }
+        let a = nonce(os_random);
+        let b = nonce(os_random);
         assert_eq!(a.len(), 32);
         assert_ne!(a, b, "a repeated nonce defeats the point of having one");
     }

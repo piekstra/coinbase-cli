@@ -213,3 +213,17 @@ jobs:
             dist/cbase-*.mcpb.sha256
             dist/cbase-mcp-*.wasm
             dist/cbase-mcp-*.wasm.sha256
+      # The connector pins the Worker module by name and SHA-256, so a release
+      # without it must not pass for complete. The other assets still go up
+      # (as they do when one platform's build fails); the run goes red.
+      - name: The Worker module is on the release
+        if: ${{ always() }}
+        env:
+          WASM_RESULT: ${{ needs.wasm.result }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          wasm="dist/cbase-mcp-$version.wasm"
+          if [ "$WASM_RESULT" != success ] || [ ! -s "$wasm" ] || [ ! -s "$wasm.sha256" ]; then
+            echo "::error title=No Worker module::$wasm and its .sha256 are not on this release (wasm job: $WASM_RESULT). Re-run the failed jobs."
+            exit 1
+          fi

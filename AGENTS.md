@@ -100,7 +100,11 @@ kept for the life of the server.
 **The module stays host-neutral.** Nothing under `wasm` may reach the clock,
 randomness or network except through pk-cli-mcp's host (`pk_cli_mcp::wasm`),
 and the module may import nothing but `pk_host`: `scripts/check-wasm.mjs`
-fails the build otherwise. A dependency that pulls `getrandom` or
+fails the build otherwise. The client takes the network from its transport
+and the clock, randomness and warnings from a `client::Platform`, both
+chosen where it is built: `Platform::system()` in `Coinbase::with_key`, the
+Worker's host functions in `worker::client`. Nothing below those two picks
+a platform itself. A dependency that pulls `getrandom` or
 `wasm-bindgen` into the wasm32 build breaks the Worker; p256 is built
 without `std` there for that reason.
 

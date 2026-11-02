@@ -150,7 +150,7 @@ impl Signer {
     /// The scalar alone, without the optional public key, so this is a copy
     /// and not a scalar multiplication: the platform derives the public half
     /// on import, natively.
-    pub fn es256_pkcs8_der(&self) -> Option<Zeroizing<Vec<u8>>> {
+    fn es256_pkcs8_der(&self) -> Option<Zeroizing<Vec<u8>>> {
         match self {
             Signer::Es256(k) => {
                 let scalar: Zeroizing<[u8; 32]> = Zeroizing::new(k.to_bytes().into());
@@ -165,7 +165,7 @@ impl Signer {
 
     /// Raw JWS signature bytes over the signing input: fixed-width `r || s`
     /// for ES256, the 64-byte Ed25519 signature for EdDSA.
-    pub fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
+    fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
         match self {
             Signer::Es256(k) => {
                 use p256::ecdsa::signature::Signer as _;
@@ -199,7 +199,7 @@ pub struct Claims<'a> {
 }
 
 /// An ES256 JWS signature: `r || s`, 32 bytes each.
-pub const ES256_SIGNATURE_LEN: usize = 64;
+const ES256_SIGNATURE_LEN: usize = 64;
 
 /// Mint a bearer token for one request.
 ///
@@ -243,7 +243,7 @@ pub async fn mint(
 
 /// The JWS signing input, `base64url(header).base64url(claims)`: everything
 /// but the signature. The header's `alg` is `signer`'s.
-pub fn signing_input(signer: &Signer, c: &Claims<'_>) -> Result<String, CliError> {
+fn signing_input(signer: &Signer, c: &Claims<'_>) -> Result<String, CliError> {
     let uri = uri_claim(c.method, c.host, c.path);
     let header = json!({
         "alg": signer.algorithm(),
@@ -266,7 +266,7 @@ pub fn signing_input(signer: &Signer, c: &Claims<'_>) -> Result<String, CliError
 }
 
 /// The compact JWS: the signing input, a dot, the base64url signature.
-pub fn assemble(signing_input: &str, signature: &[u8]) -> String {
+fn assemble(signing_input: &str, signature: &[u8]) -> String {
     format!("{signing_input}.{}", B64URL.encode(signature))
 }
 

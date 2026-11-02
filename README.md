@@ -199,8 +199,9 @@ when both are set the keychain is not read at all. See
 ## Development
 
 ```console
-$ make verify     # fmt-check + clippy -D warnings + tests + smoke — the CI gate
+$ make verify     # fmt-check + clippy (native and wasm) + tests + wasm32 clippy + smoke — the CI gate
 $ make test       # fully offline: no network, no keychain, no credential
+$ make wasm       # the MCP tools as a WebAssembly module, for the Cloudflare connector
 $ make dev        # debug build, re-signed so keychain grants survive rebuilds
 ```
 

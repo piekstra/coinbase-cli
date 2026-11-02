@@ -23,15 +23,18 @@
 use std::fmt;
 
 use pk_cli_core::CliError;
+#[cfg(feature = "native")]
 use pk_cli_secrets::{CredentialStore, Secret};
 use serde::Deserialize;
 
+#[cfg(feature = "native")]
 use crate::config::KEYCHAIN_ACCOUNT;
 use crate::jwt::Signer;
 
 /// The CDP API key's name (`organizations/<org>/apiKeys/<key>`, or a bare key
 /// id), for a run that takes its key from the environment rather than the
-/// keychain. Claude Desktop's `.mcpb` passes its `sensitive` settings this way.
+/// keychain. Claude Desktop's `.mcpb` passes its `sensitive` settings this way,
+/// and the Worker module reads the Worker secrets of the same names.
 pub const ENV_KEY_NAME: &str = "CBASE_API_KEY_NAME";
 
 /// The CDP private key that goes with [`ENV_KEY_NAME`]: the PEM, or an Ed25519
@@ -39,6 +42,7 @@ pub const ENV_KEY_NAME: &str = "CBASE_API_KEY_NAME";
 pub const ENV_PRIVATE_KEY: &str = "CBASE_API_PRIVATE_KEY";
 
 /// Where the key in use came from.
+#[cfg(feature = "native")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySource {
     /// [`ENV_KEY_NAME`] and [`ENV_PRIVATE_KEY`].
@@ -51,6 +55,7 @@ pub enum KeySource {
 /// family's precedence, DESIGN.md §1.7). With both variables set the keychain
 /// is never opened, so a host that passes the key in the environment (a
 /// Claude Desktop extension) raises no keychain prompt at all.
+#[cfg(feature = "native")]
 pub fn resolve_key(creds: &CredentialStore) -> Result<Option<(Secret, KeySource)>, CliError> {
     if let Some(key) = key_from_env()? {
         return Ok(Some((key, KeySource::Env)));
@@ -62,12 +67,14 @@ pub fn resolve_key(creds: &CredentialStore) -> Result<Option<(Secret, KeySource)
 /// the keychain holds, or `None` when neither is set. One without the other is
 /// an auth error naming the missing one: falling back to the keychain would
 /// sign with a key the caller did not choose.
+#[cfg(feature = "native")]
 pub fn key_from_env() -> Result<Option<Secret>, CliError> {
     key_from_vars(env_value(ENV_KEY_NAME)?, env_value(ENV_PRIVATE_KEY)?)
 }
 
 /// A variable that is set but not UTF-8 is an auth error naming it, not
 /// "unset": treating it as unset would fall through to the keychain.
+#[cfg(feature = "native")]
 fn env_value(name: &str) -> Result<Option<String>, CliError> {
     match std::env::var(name) {
         Ok(v) => Ok(Some(v)),
@@ -78,27 +85,44 @@ fn env_value(name: &str) -> Result<Option<String>, CliError> {
     }
 }
 
+#[cfg(feature = "native")]
 fn key_from_vars(
     name: Option<String>,
     private_key: Option<String>,
 ) -> Result<Option<Secret>, CliError> {
-    let present = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
-    match (present(&name), present(&private_key)) {
+    match key_from_parts(name.as_deref(), private_key.as_deref()) {
+        Ok(blob) => Ok(blob.map(Secret::new)),
+        Err(CliError::Auth(m)) => Err(CliError::Auth(format!(
+            "{m} to use a key from the environment, or neither to use the keychain"
+        ))),
+        Err(e) => Err(e),
+    }
+}
+
+/// The key blob [`Credential::parse`] reads, from a key name and private key
+/// held apart: [`ENV_KEY_NAME`] and [`ENV_PRIVATE_KEY`] in the environment
+/// natively, the Worker secrets of the same names in the module. `None` when
+/// neither is set; one without the other is an auth error naming the missing
+/// one. The private key is repaired of what a settings field does to a PEM.
+pub fn key_from_parts(
+    name: Option<&str>,
+    private_key: Option<&str>,
+) -> Result<Option<String>, CliError> {
+    let present = |v: Option<&str>| v.is_some_and(|s| !s.trim().is_empty());
+    match (present(name), present(private_key)) {
         (false, false) => Ok(None),
         (true, false) => Err(CliError::Auth(format!(
-            "{ENV_KEY_NAME} is set but {ENV_PRIVATE_KEY} is not — set both to use a key from the \
-             environment, or neither to use the keychain"
+            "{ENV_KEY_NAME} is set but {ENV_PRIVATE_KEY} is not — set both"
         ))),
         (false, true) => Err(CliError::Auth(format!(
-            "{ENV_PRIVATE_KEY} is set but {ENV_KEY_NAME} is not — set both to use a key from the \
-             environment, or neither to use the keychain"
+            "{ENV_PRIVATE_KEY} is set but {ENV_KEY_NAME} is not — set both"
         ))),
         (true, true) => {
             let blob = serde_json::json!({
                 "name": name.unwrap_or_default().trim(),
-                "privateKey": normalize_private_key(&private_key.unwrap_or_default()),
+                "privateKey": normalize_private_key(private_key.unwrap_or_default()),
             });
-            Ok(Some(Secret::new(blob.to_string())))
+            Ok(Some(blob.to_string()))
         }
     }
 }
@@ -161,6 +185,7 @@ fn normalize_private_key(raw: &str) -> String {
 ///
 /// The common way to hit this is a headless Linux host with no D-Bus secret
 /// service running — which is exactly what CI is, and how this was found.
+#[cfg(feature = "native")]
 pub fn read_stored_key(creds: &CredentialStore) -> Result<Option<Secret>, CliError> {
     match creds.get(KEYCHAIN_ACCOUNT) {
         Err(CliError::Keychain(msg)) => Err(CliError::Auth(keychain_unavailable(&msg))),
@@ -172,6 +197,7 @@ pub fn read_stored_key(creds: &CredentialStore) -> Result<Option<Secret>, CliErr
 /// even when logged out — and therefore even when the keychain itself is
 /// unreachable. Returns the credential (if any) plus a diagnostic to print,
 /// rather than failing.
+#[cfg(feature = "native")]
 pub fn peek_stored_key(creds: &CredentialStore) -> (Option<Secret>, Option<String>) {
     match creds.get(KEYCHAIN_ACCOUNT) {
         Ok(v) => (v, None),
@@ -183,6 +209,7 @@ pub fn peek_stored_key(creds: &CredentialStore) -> (Option<Secret>, Option<Strin
 /// Every auth error names the command that fixes it — a driver branching on
 /// exit 3 should never have to guess the next step. Here the remedy is two
 /// parts: make a keychain available, then store the key.
+#[cfg(feature = "native")]
 fn keychain_unavailable(msg: &str) -> String {
     format!(
         "the OS keychain is unavailable, so the API key could not be read ({msg}). \
@@ -194,6 +221,10 @@ fn keychain_unavailable(msg: &str) -> String {
 
 /// A parsed CDP API key: the id that goes in the JWT's `kid`/`sub`, and a
 /// signer over the private half.
+///
+/// `Clone`, so the Worker module parses a key once per isolate (parsing a
+/// P-256 key derives its public point) and hands each call a copy.
+#[derive(Clone)]
 pub struct Credential {
     /// The key identifier. Either the full
     /// `organizations/{org}/apiKeys/{key}` resource name or a bare UUID,
@@ -433,6 +464,27 @@ mod tests {
         }
         match key_from_vars(None, Some("x".into())) {
             Err(CliError::Auth(m)) => assert!(m.contains(ENV_KEY_NAME), "{m}"),
+            other => panic!("expected an auth error, got {other:?}"),
+        }
+    }
+
+    /// The Worker's half: the same repair and the same pairing rule, with no
+    /// word about a keychain the Worker does not have.
+    #[test]
+    fn parts_held_apart_make_one_key_blob() {
+        let pem = throwaway_pem().replace('\n', "\\n");
+        let blob = key_from_parts(Some(" organizations/o/apiKeys/k "), Some(&pem))
+            .unwrap()
+            .unwrap();
+        let c = Credential::parse(&blob).unwrap();
+        assert_eq!(c.key_id, "organizations/o/apiKeys/k");
+        assert_eq!(c.signer().algorithm(), "ES256");
+        assert!(key_from_parts(None, Some("  ")).unwrap().is_none());
+        match key_from_parts(Some("k"), None) {
+            Err(CliError::Auth(m)) => {
+                assert!(m.ends_with("— set both"), "{m}");
+                assert!(!m.contains("keychain"), "{m}");
+            }
             other => panic!("expected an auth error, got {other:?}"),
         }
     }

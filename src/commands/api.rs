@@ -32,7 +32,7 @@ pub fn run(ctx: &Ctx, args: &ApiArgs) -> Result<(), CliError> {
     }
     let (path, query) = split_query(&args.path)?;
 
-    let payload = ctx.client()?.get(&path, &query)?;
+    let payload = pk_cli_core::block_on(ctx.client()?.get(&path, &query))?;
     output::json(&payload);
     Ok(())
 }

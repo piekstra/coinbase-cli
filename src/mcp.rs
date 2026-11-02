@@ -8,27 +8,23 @@
 //!
 //! Provider access goes through [`Source`], the per-target seam of
 //! cli-common's MCP profile (DESIGN.md §2.3): async methods with no `Send`
-//! bound, so the same toolset could await a Worker's `fetch` as readily as
-//! the blocking client here. The tests run every tool offline against the
-//! scrubbed fixtures through it. [`LiveSource`] reads the key once per
-//! process (environment first, then keychain) and only when a tool is
-//! called: listing the tools touches no credential.
+//! bound, so one toolset serves both hosts. [`LiveSource`] is `cbase mcp`'s:
+//! it reads the key once per process (environment first, then keychain) and
+//! only when a tool is called, so listing the tools touches no credential.
+//! [`ClientSource`] is the Worker module's ([`crate::worker`]): the same
+//! client over the Worker's `fetch`. The tests run every tool offline against
+//! the scrubbed fixtures through the seam.
 
-use std::sync::Mutex;
-
+use pk_cli_core::transport::{PlatformSigner, Transport};
 use pk_cli_core::{dates, resolve, CliError};
 use pk_cli_mcp::{
     parse_args, ListArgs, Page, PageRequest, Server, ToolDef, ToolError, ToolOutput, Toolset,
 };
-use pk_cli_secrets::{CredentialStore, Secret};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::client::{missing_key, Coinbase};
-use crate::commands::{account_transactions, ACCOUNTS};
-use crate::config::Config;
-use crate::credential::resolve_key;
+use crate::client::{account_transactions, Coinbase, ACCOUNTS};
 use crate::parse::{self, CryptoAccount, CryptoTransaction, FillDetail};
 
 pub const ACCOUNTS_TOOL: &str = "coinbase_accounts";
@@ -57,31 +53,78 @@ pub trait Source {
     ) -> Result<Vec<Value>, CliError>;
 }
 
-/// The live API. The key is read once, on the first call, and kept for the
-/// life of the server; a key Coinbase rejects is dropped so the next call
-/// reads it again (after the user fixed it in a terminal).
-pub struct LiveSource {
-    cfg: Config,
-    creds: CredentialStore,
-    verbose: bool,
-    key: Mutex<Option<Secret>>,
+/// The live API over any transport, from a client built up front: the Worker
+/// module's source. A key that could not be read or parsed is kept as the
+/// error each call answers, so describing the tools never needs one.
+pub struct ClientSource<T> {
+    client: Result<Coinbase<T>, CliError>,
 }
 
-impl LiveSource {
-    pub fn new(cfg: Config, creds: CredentialStore, verbose: bool) -> Self {
-        Self {
-            cfg,
-            creds,
-            verbose,
-            key: Mutex::new(None),
-        }
+impl<T: Transport + PlatformSigner> ClientSource<T> {
+    pub fn new(client: Result<Coinbase<T>, CliError>) -> Self {
+        Self { client }
     }
 
-    fn with_client<T>(
+    fn client(&self) -> Result<&Coinbase<T>, CliError> {
+        self.client.as_ref().map_err(Clone::clone)
+    }
+}
+
+impl<T: Transport + PlatformSigner> Source for ClientSource<T> {
+    async fn accounts(&self) -> Result<Vec<Value>, CliError> {
+        self.client()?.get_all(ACCOUNTS, &[], None).await
+    }
+
+    async fn transactions(
         &self,
-        f: impl FnOnce(&Coinbase) -> Result<T, CliError>,
-    ) -> Result<T, CliError> {
-        let client = {
+        account_id: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<Value>, CliError> {
+        self.client()?
+            .get_all(&account_transactions(account_id), &[], limit)
+            .await
+    }
+}
+
+#[cfg(feature = "native")]
+pub use live::LiveSource;
+
+#[cfg(feature = "native")]
+mod live {
+    use std::sync::Mutex;
+
+    use pk_cli_core::CliError;
+    use pk_cli_http::BlockingTransport;
+    use pk_cli_secrets::{CredentialStore, Secret};
+    use serde_json::Value;
+
+    use super::{ClientSource, Source};
+    use crate::client::{missing_key, Coinbase};
+    use crate::config::Config;
+    use crate::credential::resolve_key;
+
+    /// The live API for `cbase mcp`. The key is read once, on the first
+    /// call, and kept for the life of the server; a key Coinbase rejects is
+    /// dropped so the next call reads it again (after the user fixed it in a
+    /// terminal).
+    pub struct LiveSource {
+        cfg: Config,
+        creds: CredentialStore,
+        verbose: bool,
+        key: Mutex<Option<Secret>>,
+    }
+
+    impl LiveSource {
+        pub fn new(cfg: Config, creds: CredentialStore, verbose: bool) -> Self {
+            Self {
+                cfg,
+                creds,
+                verbose,
+                key: Mutex::new(None),
+            }
+        }
+
+        fn client(&self) -> Result<Coinbase<BlockingTransport>, CliError> {
             // Held across the read, so parallel first calls wait for one
             // keychain read (and at most one macOS approval) instead of
             // racing to raise several.
@@ -90,30 +133,39 @@ impl LiveSource {
                 let (k, _) = resolve_key(&self.creds)?.ok_or_else(missing_key)?;
                 *key = Some(k);
             }
-            Coinbase::with_key(&self.cfg, key.as_ref().expect("set above"), self.verbose)?
-        };
-        let out = f(&client);
-        if matches!(out, Err(CliError::Auth(_))) {
-            *self.key.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            Coinbase::with_key(&self.cfg, key.as_ref().expect("set above"), self.verbose)
         }
-        out
-    }
-}
 
-/// Blocking inside `async fn` is deliberate: the stdio server polls each call
-/// on its own blocking thread with no Tokio reactor (pk-cli-mcp's `Toolset`
-/// contract), which is where `reqwest::blocking` belongs.
-impl Source for LiveSource {
-    async fn accounts(&self) -> Result<Vec<Value>, CliError> {
-        self.with_client(|c| c.get_all(ACCOUNTS, &[], None))
+        fn forget_rejected<T>(&self, out: Result<T, CliError>) -> Result<T, CliError> {
+            if matches!(out, Err(CliError::Auth(_))) {
+                *self.key.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
+            out
+        }
     }
 
-    async fn transactions(
-        &self,
-        account_id: &str,
-        limit: Option<u32>,
-    ) -> Result<Vec<Value>, CliError> {
-        self.with_client(|c| c.get_all(&account_transactions(account_id), &[], limit))
+    /// The provider mapping is [`ClientSource`]'s, the Worker's too; this
+    /// adds only where the key comes from and when to forget it. The
+    /// blocking transport's futures finish on their first poll: the stdio
+    /// server polls each call on its own blocking thread with no Tokio
+    /// reactor (pk-cli-mcp's `Toolset` contract), which is where
+    /// `reqwest::blocking` belongs.
+    impl Source for LiveSource {
+        async fn accounts(&self) -> Result<Vec<Value>, CliError> {
+            let out = ClientSource::new(self.client()).accounts().await;
+            self.forget_rejected(out)
+        }
+
+        async fn transactions(
+            &self,
+            account_id: &str,
+            limit: Option<u32>,
+        ) -> Result<Vec<Value>, CliError> {
+            let out = ClientSource::new(self.client())
+                .transactions(account_id, limit)
+                .await;
+            self.forget_rejected(out)
+        }
     }
 }
 
@@ -195,8 +247,8 @@ impl AccountItem {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TransactionsArgs {
     /// The wallet: its name ("BTC Wallet"), currency code ("BTC") or id, as
-    /// coinbase_accounts lists them. Defaults to the account set with `cbase
-    /// config set account`.
+    /// coinbase_accounts lists them. Defaults to the configured default
+    /// account, if one is set.
     #[serde(default)]
     pub account: Option<String>,
     /// Only entries on or after this date, YYYY-MM-DD.
@@ -379,7 +431,7 @@ impl<S: Source> CoinbaseTools<S> {
         let detailed = args.list.format().is_detailed();
         let matched: Vec<AccountItem> = parse::accounts(&self.source.accounts().await?)
             .iter()
-            .filter(|a| include_zero || !crate::commands::accounts::is_zero(&a.balance.amount))
+            .filter(|a| include_zero || !parse::is_zero(&a.balance.amount))
             .filter(|a| currency.is_none_or(|c| a.currency.eq_ignore_ascii_case(c)))
             .map(|a| AccountItem::from(a, detailed))
             .collect();

@@ -269,6 +269,13 @@ pub fn iso_date(ts: &str) -> Option<String> {
     }
 }
 
+/// True for `"0"`, `"0.00000000"`, `"-0.0"`, and friends — without parsing a
+/// float, which would round a dust balance to zero and hide it.
+pub fn is_zero(amount: &str) -> bool {
+    let s = amount.trim().trim_start_matches(['+', '-']);
+    !s.is_empty() && s.chars().all(|c| c == '0' || c == '.')
+}
+
 /// Keep only records whose `date` falls within an inclusive ISO range.
 ///
 /// Client-side because the v2 transactions endpoint publishes no date filter —
@@ -299,6 +306,16 @@ pub fn within<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_detection_does_not_go_through_a_float() {
+        for z in ["0", "0.0", "0.00000000", "-0.00000000", "+0", " 0.00 "] {
+            assert!(is_zero(z), "{z} should read as zero");
+        }
+        for nz in ["0.00000001", "1", "-0.5", "10.00", ""] {
+            assert!(!is_zero(nz), "{nz} should not read as zero");
+        }
+    }
     use serde_json::json;
 
     #[test]

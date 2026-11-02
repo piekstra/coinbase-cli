@@ -292,7 +292,7 @@ fn login(
 /// One cheap authenticated read, to prove the key works.
 fn verify(cfg: &Config, creds: &CredentialStore) -> Result<(), CliError> {
     let client = Coinbase::new(cfg, creds, false)?;
-    client.get(ACCOUNTS, &[("limit", "1".into())])?;
+    pk_cli_core::block_on(client.get(ACCOUNTS, &[("limit", "1".into())]))?;
     Ok(())
 }
 

@@ -5,7 +5,7 @@
 //! the `id` column is exactly the value that flag wants.
 
 use clap::Subcommand;
-use pk_cli_core::CliError;
+use pk_cli_core::{block_on, CliError};
 use pk_cli_utility::Paged;
 
 use super::{Ctx, ACCOUNTS};
@@ -41,12 +41,11 @@ pub struct ListArgs {
 pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
     let Cmd::List(args) = cmd;
 
-    let rows = ctx
-        .client()?
-        .get_all(ACCOUNTS, &[], zero_filtered_limit(args.all, args.limit))?;
+    let client = ctx.client()?;
+    let rows = block_on(client.get_all(ACCOUNTS, &[], zero_filtered_limit(args.all, args.limit)))?;
     let mut accounts = parse::accounts(&rows);
     if !args.all {
-        accounts.retain(|a| !is_zero(&a.balance.amount));
+        accounts.retain(|a| !parse::is_zero(&a.balance.amount));
     }
     if let Some(n) = args.limit {
         accounts.truncate(n as usize);
@@ -67,26 +66,9 @@ fn zero_filtered_limit(all: bool, limit: Option<u32>) -> Option<u32> {
     }
 }
 
-/// True for `"0"`, `"0.00000000"`, `"-0.0"`, and friends — without parsing a
-/// float, which would round a dust balance to zero and hide it.
-pub fn is_zero(amount: &str) -> bool {
-    let s = amount.trim().trim_start_matches(['+', '-']);
-    !s.is_empty() && s.chars().all(|c| c == '0' || c == '.')
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn zero_detection_does_not_go_through_a_float() {
-        for z in ["0", "0.0", "0.00000000", "-0.00000000", "+0", " 0.00 "] {
-            assert!(is_zero(z), "{z} should read as zero");
-        }
-        for nz in ["0.00000001", "1", "-0.5", "10.00", ""] {
-            assert!(!is_zero(nz), "{nz} should not read as zero");
-        }
-    }
 
     #[test]
     fn the_fetch_limit_is_dropped_when_zero_balances_are_filtered_out() {

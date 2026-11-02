@@ -4,8 +4,17 @@
 
 BIN := cbase
 CARGO := cargo
+# Where cargo builds: honours a shared CARGO_TARGET_DIR.
+TARGET_DIR := $(or $(CARGO_TARGET_DIR),target)
+VERSION := $(shell sed -n 's/^version = "\(.*\)"$$/\1/p' Cargo.toml | head -1)
 
-.PHONY: all build release test lint fmt fmt-check clean install deps smoke verify dev
+# The MCP tools as a WebAssembly module for the deploy-your-own Cloudflare
+# Worker (cli-common's connector/): the library alone, feature `wasm`.
+WASM_TARGET := wasm32-unknown-unknown
+WASM_FLAGS := --lib --target $(WASM_TARGET) --no-default-features --features wasm
+WASM_OUT := $(TARGET_DIR)/$(WASM_TARGET)/release/cbase.wasm
+
+.PHONY: all build release test lint fmt fmt-check clean install deps smoke verify dev wasm wasm-check
 
 all: verify
 
@@ -17,16 +26,28 @@ build:
 # identity every rebuild -- each `make verify` would throw fresh "Always
 # Allow" prompts, one per keychain entry. Signed with the stable identity,
 # the grant made for the installed binary covers this one too.
-release: SIGN_TARGET = target/release/$(BIN)
+release: SIGN_TARGET = $(TARGET_DIR)/release/$(BIN)
 release:
 	$(CARGO) build --release
 	@$(SIGN)
 
+# `wasm` adds the Worker module's tests (tests/worker.rs) to the native run.
 test:
-	$(CARGO) test --all
+	$(CARGO) test --all --features wasm
 
 lint:
 	$(CARGO) clippy --all-targets -- -D warnings
+	$(CARGO) clippy --all-targets --features wasm -- -D warnings
+
+# The Worker module type-checks and lints for its real target.
+wasm-check:
+	$(CARGO) clippy $(WASM_FLAGS) -- -D warnings
+
+# Build the module the release attaches as cbase-mcp-<version>.wasm, and check
+# it against the host's contract (scripts/check-wasm.mjs; needs Node).
+wasm:
+	$(CARGO) rustc $(WASM_FLAGS) --crate-type cdylib --release --locked
+	node scripts/check-wasm.mjs $(WASM_OUT) $(VERSION)
 
 fmt:
 	$(CARGO) fmt --all
@@ -52,7 +73,7 @@ deps:
 
 # Debug build re-signed with the same stable identity, so the dev loop doesn't
 # re-prompt either.
-dev: SIGN_TARGET = target/debug/$(BIN)
+dev: SIGN_TARGET = $(TARGET_DIR)/debug/$(BIN)
 dev:
 	cargo build
 	@$(SIGN)
@@ -68,10 +89,10 @@ endef
 # Cheap sanity checks needing no credential or network: version, help, and the
 # discovery commands that answer without a key.
 smoke: release
-	./target/release/$(BIN) --version
-	./target/release/$(BIN) --help > /dev/null
-	./target/release/$(BIN) info > /dev/null
-	./target/release/$(BIN) mcp --list-tools > /dev/null
-	./target/release/$(BIN) auth status --json > /dev/null
+	$(TARGET_DIR)/release/$(BIN) --version
+	$(TARGET_DIR)/release/$(BIN) --help > /dev/null
+	$(TARGET_DIR)/release/$(BIN) info > /dev/null
+	$(TARGET_DIR)/release/$(BIN) mcp --list-tools > /dev/null
+	$(TARGET_DIR)/release/$(BIN) auth status --json > /dev/null
 
-verify: fmt-check lint test smoke
+verify: fmt-check lint test wasm-check smoke

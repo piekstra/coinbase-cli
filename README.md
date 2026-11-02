@@ -113,8 +113,8 @@ stderr, and each JSON DTO carries a `schema` tag.
 
 `cbase mcp` serves two read-only tools over MCP, so Claude can answer
 questions about your own Coinbase account. There is no hosted service: the
-tools run on your computer, in your copy of `cbase`, and call Coinbase
-directly with your key.
+tools run on your computer, in your copy of `cbase`, or in a Cloudflare
+Worker in your own account, and call Coinbase directly with your key.
 
 | Tool | Answers |
 | --- | --- |
@@ -148,8 +148,25 @@ values in the JSON file Coinbase gave you), keeps them in its own secure
 store, and passes them to the bundled binary as `CBASE_API_KEY_NAME` and
 `CBASE_API_PRIVATE_KEY`. No separate install and no keychain are involved.
 
-**claude.ai on the web and mobile.** Coming: a connector you deploy to your
-own free Cloudflare account, so the key stays in an account you control.
+**claude.ai on the web and mobile.** Deploy your own connector: a
+Cloudflare Worker in your own (free) Cloudflare account that runs these same
+two tools, compiled to WebAssembly from this repository's code and attached
+to each release as `cbase-mcp-<version>.wasm`. Your key is a secret in your
+Worker; no service of ours sits in between, and only someone with the
+passphrase you choose can connect a client to it.
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/piekstra/cli-common/tree/main/connector)
+
+1. Create a View-only ECDSA key at the
+   [Coinbase Developer Platform](https://portal.cdp.coinbase.com/projects/api-keys).
+2. Click **Deploy to Cloudflare** and enter a passphrase of 20 characters or
+   more, the key's `name` and its `privateKey`.
+3. In Claude, open **Settings → Connectors → Add custom connector** and enter
+   your Worker's URL with `/mcp` on the end.
+4. Click **Connect** and type the passphrase on your Worker's page.
+
+The [connector's README](https://github.com/piekstra/cli-common/tree/main/connector#readme)
+has the full walkthrough, how to update and rotate, and the threat model.
 
 Any other MCP client that launches a local server can run `cbase mcp`. If the
 key is missing or rejected, the tools say so and ask you to run `cbase auth

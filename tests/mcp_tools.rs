@@ -50,11 +50,7 @@ impl Fixtures {
     }
 
     fn failure(&self) -> Option<CliError> {
-        self.fail.lock().unwrap().as_ref().map(|e| match e {
-            CliError::Auth(m) => CliError::Auth(m.clone()),
-            CliError::Upstream(m) => CliError::Upstream(m.clone()),
-            other => CliError::Other(other.to_string()),
-        })
+        self.fail.lock().unwrap().clone()
     }
 }
 

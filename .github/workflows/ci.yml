@@ -43,13 +43,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Install keyring build deps
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all
+      - run: make lint
+      - run: make test
       - run: cargo build --release
+      # The Worker module: lint for wasm32, then build it exactly as the
+      # release does and check it against the host's contract.
+      - run: make wasm-check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: make wasm
 
   security:
     name: audit / deny / secrets

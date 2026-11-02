@@ -10,7 +10,7 @@
 //! on a long history, and the reason `--limit` exists.
 
 use clap::Subcommand;
-use pk_cli_core::CliError;
+use pk_cli_core::{block_on, CliError};
 use pk_cli_utility::{Paged, RangeArgs};
 
 use super::{account_transactions, Ctx};
@@ -41,9 +41,8 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
     let account = ctx.account(args.account.as_deref())?;
 
     let path = account_transactions(&account);
-    let rows = ctx
-        .client()?
-        .get_all(&path, &[], fetch_limit(&args.range))?;
+    let client = ctx.client()?;
+    let rows = block_on(client.get_all(&path, &[], fetch_limit(&args.range)))?;
 
     let parsed = parse::transactions(&rows);
     let mut txns = parse::within(

@@ -6,9 +6,15 @@ The canonical agent guide for this repo. `CLAUDE.md` points here.
 
 A piekstra-family CLI (spec `piekstra-cli/1`) over the **Coinbase App API** at
 `api.coinbase.com`. Thin layer over the shared `pk-cli-*` crates from
-[cli-common](https://github.com/piekstra/cli-common), pinned to tag **v0.4.0**.
+[cli-common](https://github.com/piekstra/cli-common), pinned to tag **v0.14.0**.
 
-Binary `cbase`, crate `coinbase-cli`, lib `cbase`.
+Binary `cbase`, crate `coinbase-cli`, lib `cbase`. The library builds two
+ways: feature `native` (the default) is everything the binary needs, and
+`--no-default-features --features wasm` builds it for `wasm32-unknown-unknown`
+as the MCP tools' WebAssembly module, released as `cbase-mcp-<version>.wasm`
+for cli-common's deploy-your-own Cloudflare connector. Same tools, client,
+signer and parsers; only the transport differs (`pk_cli_core::transport`:
+blocking reqwest natively, the Worker's `fetch` and WebCrypto in the module).
 
 ## The one thing to understand first
 
@@ -39,18 +45,21 @@ Practical consequences:
 | Path | What lives there |
 | --- | --- |
 | `src/main.rs` | clap tree, `auth`/`config` commands, exit-code mapping |
-| `src/client.rs` | HTTP client (GET only), pagination, error→exit-code mapping |
-| `src/jwt.rs` | CDP JWT minting: ES256 and EdDSA, by hand |
-| `src/credential.rs` | Parsing the CDP key file; masking; the no-leak `Debug` |
+| `src/client.rs` | HTTP client (GET only) over any `Transport`, pagination, error→exit-code mapping |
+| `src/jwt.rs` | CDP JWT minting: ES256 and EdDSA, by hand; the signing input apart so a platform signer can sign it |
+| `src/credential.rs` | Parsing the CDP key file; masking; the no-leak `Debug`; the keychain and environment sources (`native`) |
 | `src/config.rs` | Non-secret settings |
 | `src/parse.rs` | Coinbase JSON → DTOs |
 | `src/commands/` | One module per command group |
-| `src/mcp.rs` | `cbase mcp`: the MCP tools (`coinbase_accounts`, `coinbase_transactions`) over the same client and DTOs, behind the `Source` seam |
+| `src/mcp.rs` | The MCP tools (`coinbase_accounts`, `coinbase_transactions`) over the same client and DTOs, behind the `Source` seam: `LiveSource` for `cbase mcp`, `ClientSource` for the Worker |
+| `src/worker.rs` | The Worker module (`wasm`): the toolset per call from the Worker's secrets, exported with `pk_cli_mcp::export_wasm!` |
+| `scripts/check-wasm.mjs` | Checks a built module against the host's ABI before it is published (`make wasm`, the release workflow) |
 | `packaging/mcpb/manifest.json` | The Claude Desktop extension manifest; the release workflow packs `cbase-<version>.mcpb` from it |
 | `tests/cli_surface.rs` | Black-box: help, exit codes, the read-only guard |
 | `tests/fixture_shapes.rs` | Contract tests over `tests/fixtures/` |
 | `tests/mcp_tools.rs` | Every MCP tool in process over the fixtures, plus cli-common's conformance check |
 | `tests/mcp_stdio.rs` | The real `cbase mcp` binary driven over stdio |
+| `tests/worker.rs` | The Worker module through its ABI, natively (`--features wasm`), with every JWT verified |
 | `tests/packaging.rs` | The `.mcpb` manifest against the code: version, tools, env vars |
 
 ## Non-negotiables
@@ -67,7 +76,9 @@ its own `ToolDef::write` (never mixed into a read), and none may move money.
 repo, never a log line. The one other source is the environment pair
 `CBASE_API_KEY_NAME` + `CBASE_API_PRIVATE_KEY` (`credential::resolve_key`),
 which wins over the keychain and is how the Claude Desktop extension passes
-the key from its own secure store; half a pair is exit 3, never a fall-back. `Credential` has a hand-written `Debug` so a stray
+the key from its own secure store; half a pair is exit 3, never a fall-back.
+The Worker module reads the same two names from the Worker's secrets
+(`credential::key_from_parts`) and has no other source. `Credential` has a hand-written `Debug` so a stray
 `{:?}` can't leak it — don't derive `Debug` over key material.
 
 **No key material in the repo.** Tests that need a key generate a throwaway one
@@ -80,9 +91,18 @@ regression here.
 
 **MCP tools never sign in.** A tool call never prompts, never starts a login
 and never creates a keychain item; a missing or rejected key is an `auth`
-error telling the model to have the user run `cbase auth login` in a terminal.
+error telling the model to have the user run `cbase auth login` in a terminal
+(in the Worker: to update the Worker's secrets; pk-cli-mcp's `InWorker`
+rewrites the wording, and the 401 hint is only added natively).
 `tools/list` touches no credential: the key is read on the first call and
 kept for the life of the server.
+
+**The module stays host-neutral.** Nothing under `wasm` may reach the clock,
+randomness or network except through pk-cli-mcp's host (`pk_cli_mcp::wasm`),
+and the module may import nothing but `pk_host`: `scripts/check-wasm.mjs`
+fails the build otherwise. A dependency that pulls `getrandom` or
+`wasm-bindgen` into the wasm32 build breaks the Worker; p256 is built
+without `std` there for that reason.
 
 **Exactly one JSON document per invocation.** `auth status --verify` emits its
 DTO then calls `std::process::exit` directly rather than returning an error,
@@ -129,10 +149,15 @@ Full detail and citations in `docs/api.md`. The short list:
 ## Dev loop
 
 ```console
-$ make verify     # exactly what CI runs: fmt-check + clippy -D warnings + test + smoke
+$ make verify     # fmt-check + clippy -D warnings (with and without `wasm`) + test + wasm32 clippy + smoke
+$ make wasm       # the Worker module, checked against the host ABI (needs Node)
 $ make dev        # debug build, re-signed with the stable identity
 $ make install    # installs AND re-signs — `cargo install` alone re-prompts the keychain
 ```
+
+To try a module change in the connector before releasing it, build it with
+`make wasm` and point cli-common's `connector/` at the file
+(`CONNECTOR_MODULE_COINBASE=<path> npm run e2e` there).
 
 Tests are **fully offline** and must stay that way: no network, no keychain, no
 credential. Nothing in the suite should ever spend a Coinbase request.

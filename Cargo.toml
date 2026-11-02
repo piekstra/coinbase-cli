@@ -18,25 +18,52 @@ path = "src/lib.rs"
 [[bin]]
 name = "cbase"
 path = "src/main.rs"
+required-features = ["native"]
+
+[features]
+default = ["native"]
+# Everything the terminal binary needs and a Cloudflare Worker cannot have:
+# the OS keychain, clap, self-update, the blocking HTTP client, and the stdio
+# MCP server.
+native = [
+    "dep:clap",
+    "dep:clap_complete",
+    "dep:pk-cli-secrets",
+    "dep:pk-cli-config",
+    "dep:pk-cli-selfupdate",
+    "dep:pk-cli-auth",
+    "dep:pk-cli-http",
+    "dep:pk-cli-utility",
+    "pk-cli-mcp/stdio",
+    "p256/std",
+]
+# The MCP tools as a WebAssembly module for the deploy-your-own Worker
+# (cli-common's connector/): build the library with `make wasm`, which runs
+#   cargo rustc --lib --crate-type cdylib --release \
+#     --target wasm32-unknown-unknown --no-default-features --features wasm
+# Natively it builds too, for the tests that drive the Worker toolset through
+# pk-cli-mcp's stand-in host (`cargo test --features wasm`).
+wasm = ["pk-cli-mcp/wasm"]
 
 [dependencies]
-clap = { version = "4", features = ["derive", "env"] }
-clap_complete = "4"
+clap = { version = "4", features = ["derive", "env"], optional = true }
+clap_complete = { version = "4", optional = true }
 serde = { version = "1", features = ["derive"] }
 # preserve_order keeps DTO fields and table columns in the order the code builds
 # them, rather than alphabetized by serde_json's default map ordering.
 serde_json = { version = "1", features = ["preserve_order"] }
-pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0", features = ["reqwest"] }
-pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
-pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
-pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
-pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
-pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
-pk-cli-utility = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0" }
-# `cbase mcp`: the MCP profile's tools over the same commands (DESIGN.md §1.9).
-pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0", features = ["stdio"] }
+pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0" }
+pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
+pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
+pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
+pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
+# The blocking HTTP client, behind pk-cli-core's `Transport`.
+pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
+pk-cli-utility = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
+# The MCP profile's tools over the same client (DESIGN.md §1.9): `cbase mcp`
+# with `native`, the Worker module with `wasm`.
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0" }
 schemars = "1"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # --- CDP JWT signing -------------------------------------------------------
 # Coinbase authenticates every request with a short-lived JWT signed by the CDP
@@ -46,15 +73,26 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 # with `jsonwebtoken`, because Coinbase requires a `nonce` field in the JOSE
 # *header* and that crate's `Header` struct has no room for non-standard header
 # parameters.
-p256 = { version = "0.14", default-features = false, features = ["std", "ecdsa", "pem", "pkcs8"] }
+# No `std` here: p256's `std` turns on its OS random source, which has no
+# backend on wasm32-unknown-unknown without `wasm-bindgen`. Signing needs no
+# randomness (RFC 6979); `native` adds `std` back for the binary.
+p256 = { version = "0.14", default-features = false, features = ["alloc", "ecdsa", "pem", "pkcs8"] }
 ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "fast", "pkcs8", "zeroize"] }
 sha2 = "0.11"
 base64 = "0.23"
+# The key's PKCS#8 copy for a platform signer is wiped on drop.
+zeroize = "1"
+
+# The JWT nonce natively. On wasm32 it comes from the Worker's
+# `crypto.getRandomValues` through pk-cli-mcp's host instead: rand's OS source
+# there needs `wasm-bindgen`, which the module's ABI leaves out.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rand = "0.10"
 
 [dev-dependencies]
-# The MCP profile's conformance checks, for the tests only.
-pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.12.0", features = ["test-util"] }
+# The MCP profile's conformance checks and, with `wasm`, the stand-in host,
+# for the tests only.
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", features = ["test-util"] }
 assert_cmd = "2"
 predicates = "3"
 

@@ -20,14 +20,22 @@ their wallet balances and full transaction history. What's worth protecting:
   own secure store (the Claude Desktop extension) passes the key instead as
   `CBASE_API_KEY_NAME` and `CBASE_API_PRIVATE_KEY`; with both set the
   keychain is never opened, and with only one set the call fails (exit 3)
-  rather than fall back to a different key.
+  rather than fall back to a different key. In the deploy-your-own
+  Cloudflare connector the key is the Worker's `CBASE_API_KEY_NAME` and
+  `CBASE_API_PRIVATE_KEY` secrets, in the user's own Cloudflare account. The
+  module (`cbase-mcp-<version>.wasm`) parses the key in memory and keeps the
+  parsed key for the isolate's life, keyed on the key's SHA-256 rather than
+  a second copy of it. It hands the Worker's WebCrypto the EC scalar as
+  PKCS#8 to sign with. The connector's own threat model is in
+  [cli-common's connector README](https://github.com/piekstra/cli-common/tree/main/connector#threat-model).
 - **The minted JWTs.** Held for the duration of a single request, never
   persisted, never logged — `--verbose` prints the method, path, and query
   parameters, never the `Authorization` header. Each token lives 120 seconds and
   is bound to one method+path, so even a leaked one is near-useless.
 - **The transaction history itself.** Not a credential, but it is a complete
-  financial and counterparty record. It goes to stdout and nowhere else: no
-  telemetry, no caching to disk, no third parties.
+  financial and counterparty record. It goes to stdout, or to the MCP
+  client that asked, and nowhere else: no telemetry, no caching to disk, no
+  third parties.
 
 ## Reduce the blast radius: create a View-only key
 
@@ -43,8 +51,9 @@ portal narrows it further.
   exposes no HTTP verb but `GET`, and the `api` passthrough refuses every other
   verb with exit code 6. There is no code path that can POST.
 - It talks only to the configured API host (`api.coinbase.com` by default). The
-  `base_url` config key exists for proxies and test servers; if it is set to
-  something else, that is where your requests go.
+  `base_url` config key (in the Worker, `CBASE_BASE_URL`) exists for proxies
+  and test servers; if it is set to something else, that is where your
+  requests go. It follows no redirects.
 - It hardcodes no secrets and embeds no key material. `gitleaks` runs in CI over
   the full history, and a test refuses any credential-shaped substring in the
   test fixtures.

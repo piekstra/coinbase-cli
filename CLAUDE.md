@@ -12,8 +12,8 @@ Claude-specific notes:
   only the empty `piekstra.cbase.hermetic-tests` keychain service, never the
   real key (AGENTS.md, "Dev loop").
 - **Live verification happened on 2026-08-13.** A View-only ECDSA CDP key
-  proved the hand-rolled JWT, walked all 130 accounts and a 3,559-row ledger,
-  and exercised the v3 Advanced Trade read surface. The fixtures are scrubbed
+  proved the hand-rolled JWT, walked every account and the full ledger, and
+  exercised the v3 Advanced Trade read surface. The fixtures are scrubbed
   captures from that run (`tests/fixtures/README.md`). `docs/api.md` §5 lists
   what it left unverified: nonce enforcement, Ed25519 rejection, Advanced Trade
   rate limits and the v3 fills feed. Don't write "verified" or "confirmed

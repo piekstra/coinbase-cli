@@ -55,8 +55,8 @@ that holds nothing.
 
 **This CLI was verified live on 2026-08-13**, with a View-only ECDSA CDP key
 against a real account: the JWT authenticated on the first request, the run
-walked all 130 accounts and a 3,559-row ledger, and it exercised the v3
-Advanced Trade read surface. The fixtures are scrubbed captures from that run.
+walked every account and the full ledger, and it exercised the v3 Advanced
+Trade read surface. The fixtures are scrubbed captures from that run.
 
 [`docs/api.md` §5](docs/api.md) lists what that run left unverified: whether
 `nonce` is enforced, whether an Ed25519 key really fails, Advanced Trade rate

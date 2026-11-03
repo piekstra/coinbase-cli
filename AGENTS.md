@@ -6,7 +6,7 @@ The canonical agent guide for this repo. `CLAUDE.md` points here.
 
 A piekstra-family CLI (spec `piekstra-cli/1`) over the **Coinbase App API** at
 `api.coinbase.com`. Thin layer over the shared `pk-cli-*` crates from
-[cli-common](https://github.com/piekstra/cli-common), pinned to tag **v0.14.0**.
+[cli-common](https://github.com/piekstra/cli-common), pinned to tag **v0.15.1**.
 
 Binary `cbase`, crate `coinbase-cli`, lib `cbase`. The library builds two
 ways: feature `native` (the default) is everything the binary needs, and

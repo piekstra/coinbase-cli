@@ -161,6 +161,19 @@ fn completions_render_for_every_supported_shell() {
 }
 
 #[test]
+fn no_color_in_the_environment_never_fails_a_command() {
+    // Any non-empty NO_COLOR disables color, per no-color.org. Read as a
+    // boolean flag, NO_COLOR=1 was a usage error on every command.
+    for v in ["1", "true", "0", ""] {
+        cbase()
+            .env("NO_COLOR", v)
+            .args(["completions", "bash"])
+            .assert()
+            .success();
+    }
+}
+
+#[test]
 fn auth_status_answers_without_a_credential() {
     // Logged-out `auth status` must succeed (SPEC v1 §1.2), not exit 3.
     let out = cbase()

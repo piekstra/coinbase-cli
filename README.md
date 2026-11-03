@@ -210,7 +210,9 @@ account `api-key`), is read at point of use, and is never logged, never
 written to disk by this tool, and never accepted on argv. A host that keeps
 the key in its own secure store (Claude Desktop) passes it instead as two
 environment variables, `CBASE_API_KEY_NAME` and `CBASE_API_PRIVATE_KEY`;
-when both are set the keychain is not read at all. See
+when both are set, requests and `cbase mcp` use them and do not read the
+keychain. `auth status`, `auth login` and `auth set-credential` still read it,
+to report or check the key stored there. See
 [SECURITY.md](SECURITY.md).
 
 ## Development

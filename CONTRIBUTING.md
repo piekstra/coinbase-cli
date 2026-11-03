@@ -12,10 +12,11 @@ contribution is licensed under those same terms.
   fixtures, or commit messages.
 - **Never commit key material — not even a throwaway PEM.** Tests that need a
   key generate one at runtime. There must never be a `.pem` in the tree.
-- **Fixtures are hand-authored from published docs, with dummy values only.**
-  See [`tests/fixtures/README.md`](tests/fixtures/README.md); a test enforces
-  the rule positively. If you ever replace them with real captures, scrub them
-  and say so there.
+- **Fixtures are scrubbed live captures, with dummy values only.** They were
+  captured on 2026-08-13. [`tests/fixtures/README.md`](tests/fixtures/README.md)
+  has the scrubbing policy and the one shape kept from the docs, and a test
+  enforces the rule positively. If you refresh them from new captures, scrub
+  them and update that file in the same commit.
 - **Read-only by default.** Every command observes. The guarantee lives in
   `client::Coinbase` (no verb but GET), the `api` verb guard, and the docs —
   all three change together or not at all.
@@ -52,18 +53,17 @@ that holds nothing.
 
 ## A note on the current state
 
-**This CLI has never made a live Coinbase API call.** It was built offline from
-published documentation, and its fixtures are hand-authored rather than
-captured. That is unusual for this family and is called out in
-`tests/fixtures/README.md`.
+**This CLI was verified live on 2026-08-13**, with a View-only ECDSA CDP key
+against a real account: the JWT authenticated on the first request, the run
+walked all 130 accounts and a 3,559-row ledger, and it exercised the v3
+Advanced Trade read surface. The fixtures are scrubbed captures from that run.
 
-If you are the first person to run it against a real account: please work
-through the checklist in [`docs/api.md` §5](docs/api.md), and turn whatever you
-find into fixtures and doc corrections. Expect to find something — a stale
-`CB-VERSION` pin, a renamed field, a shape the docs don't quite match. That
-first run is the most valuable contribution this repo can receive right now.
+[`docs/api.md` §5](docs/api.md) lists what that run left unverified: whether
+`nonce` is enforced, whether an Ed25519 key really fails, Advanced Trade rate
+limits, and the v3 fills feed. If you settle one, update `docs/api.md`, the
+fixtures and `tests/fixtures/README.md` in the same commit.
 
-Two things to be careful with when you do:
+Two things to be careful with when you run it against a real account:
 
 - **Never paste a raw capture into an issue or a commit.** It carries account
   ids, balances, counterparties, and on-chain addresses.

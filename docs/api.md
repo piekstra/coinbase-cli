@@ -277,7 +277,7 @@ Query: `limit` (0–100, default **25**), `order` (`asc`|`desc`, default `desc`)
 `starting_after`, `ending_before`.
 
 Response shape: `{"pagination": {...}, "data": [...]}`. Observed row shape
-(130 accounts, 2026-08-13, uniform across all of them): `id`, `name`,
+(every account, 2026-08-13, uniform across all of them): `id`, `name`,
 `primary`, `type` (`wallet`|`fiat`|`vault`), `balance`, `created_at`,
 `updated_at`, `resource`, `resource_path`, `currency`, plus three fields the
 docs don't list — **`allow_deposits`**, **`allow_withdrawals`**, and
@@ -313,7 +313,7 @@ that is a real cost, and it is why `--limit` exists. It is also why
 dates are given: the wanted records may be anywhere in the history, and stopping
 early would silently return a prefix of the wrong range.
 
-Observed row shape (3,559 rows across all 130 accounts, 2026-08-13): `amount`
+Observed row shape (every row across every account, 2026-08-13): `amount`
 `{amount, currency}`, `created_at`, `id`, `native_amount` `{amount, currency}`
 (present on **every** row, always USD here), `resource`, `resource_path`,
 `status`, `type`, plus conditional fields. **`updated_at` never appeared**, and
@@ -322,7 +322,7 @@ neither did `details` — both documented. `description` appeared only on
 rows (a sender memo); on every other row the key is absent.
 
 **Traps:**
-- **`details` does not exist in practice** (0 of 3,559 rows under
+- **`details` does not exist in practice** (on no row of a full-ledger capture under
   `CB-VERSION: 2022-01-06`), despite the docs putting the human label in
   `details.title`. `parse::description` still prefers `details` in case newer
   API versions send it, but the fallback to top-level `description` is the
@@ -342,14 +342,14 @@ rows (a sender memo); on every other row the key is absent.
 **The documented type list is incomplete.** The docs list 29 values; a single
 real account's history contained **nine types that are not on that list**:
 
-> observed, undocumented: `staking_reward` (1,410 rows — the most common type
-> in the entire ledger), `interest` (317), `pro_deposit` (282),
-> `exchange_withdrawal` (164), `inflation_reward` (156), `pro_withdrawal` (89),
-> `exchange_deposit` (40), `asset_migration` (2), `retail_eth2_deprecation` (2)
+> observed, undocumented: `staking_reward` (the most common type in the
+> entire ledger), `interest`, `pro_deposit`, `exchange_withdrawal`,
+> `inflation_reward`, `pro_withdrawal`, `exchange_deposit`, `asset_migration`,
+> `retail_eth2_deprecation`
 >
-> observed, documented: `send` (499), `fiat_withdrawal` (234), `trade` (158),
-> `sell` (74), `advanced_trade_fill` (68), `earn_payout` (20), `buy` (16),
-> `tx` (15), `fiat_deposit` (7), `staking_transfer` (4), `wrap_asset` (2)
+> observed, documented: `send`, `fiat_withdrawal`, `trade`, `sell`,
+> `advanced_trade_fill`, `earn_payout`, `buy`, `tx`, `fiat_deposit`,
+> `staking_transfer`, `wrap_asset`
 
 Two corrections the live run forced on this document:
 

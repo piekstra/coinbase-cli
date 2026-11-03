@@ -215,7 +215,7 @@ fn fill_detail(row: &Value) -> Option<FillDetail> {
 /// top-level `description`.
 ///
 /// Live reality check (2026-08-13, `CB-VERSION: 2022-01-06`): **`details` never
-/// appeared** — not once in a 3,559-row ledger — and `description` exists only
+/// appeared** — not once in a full-ledger capture — and `description` exists only
 /// on `earn_payout` and `send` rows (a label or a sender memo), absent
 /// everywhere else. The `details` preference is kept because the docs attach it
 /// to newer API versions, but the fallback is the path that actually runs.

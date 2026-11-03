@@ -49,7 +49,7 @@ fn accounts_parse_into_the_columns_the_table_renders() {
 }
 
 /// Coinbase documents `currency` as a bare string on older API versions. The
-/// live capture (130 accounts) served only the object shape, but the legacy
+/// live capture (every account) served only the object shape, but the legacy
 /// shape is cheap to keep parsing and version-dependent to encounter.
 #[test]
 fn the_legacy_string_currency_shape_still_parses() {
@@ -122,7 +122,7 @@ fn transactions_parse_into_the_columns_the_table_renders() {
 }
 
 /// Pins the live capture's negative space: `details` and `updated_at` were on
-/// no row of a 3,559-entry ledger (`CB-VERSION: 2022-01-06`), even though both
+/// no row of a full-ledger capture (`CB-VERSION: 2022-01-06`), even though both
 /// are documented. This stops the fixtures drifting back toward invented
 /// shapes the parsers would then silently depend on.
 #[test]
@@ -186,7 +186,7 @@ fn an_advanced_trade_fill_keeps_its_commission_and_price() {
 /// The docs list no `staking_reward` and imply `earn_payout` is the staking
 /// spelling; this repo's first draft even pinned "`staking_reward` does not
 /// exist" as a test. The first live capture (2026-08-13) refuted it: a real
-/// ledger held 1,410 `staking_reward` rows against 20 `earn_payout`, plus
+/// ledger held far more `staking_reward` rows than `earn_payout` ones, plus
 /// `inflation_reward` and `interest`. Any income filter must match all four —
 /// matching one spelling silently underreports income, a wrong tax answer
 /// that looks like a right one.

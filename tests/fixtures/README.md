@@ -10,7 +10,7 @@ test here instead of silently emptying a column.
 `CB-VERSION: 2022-01-06` (the pin in `src/client.rs`), against a real account,
 with a View-only ECDSA CDP key. Structure is real — keys, nesting, key order,
 null-vs-absent, sign conventions — and every value is a dummy per the policy
-below. The capture walked all 130 accounts and a 3,559-row ledger; each row
+below. The capture walked every account and the full ledger; each row
 kept here is the exemplar of a shape that walk actually produced.
 
 The one deliberate exception: `accounts_last_page.json` keeps the **legacy
@@ -21,8 +21,8 @@ version-dependent and is cheap to keep parsing.
 Reality corrected the hand-authored predecessors of these files in ways worth
 naming, because each one was a plausible bug:
 
-- **`staking_reward` exists** (1,410 rows — the most common type in the
-  ledger), despite the docs listing no such type. Reward income arrived under
+- **`staking_reward` exists** (the most common type in the ledger),
+  despite the docs listing no such type. Reward income arrived under
   four spellings: `staking_reward`, `earn_payout`, `inflation_reward`,
   `interest`. Eight other undocumented types appeared too (`pro_deposit`,
   `pro_withdrawal`, `exchange_deposit`, `exchange_withdrawal`,

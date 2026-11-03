@@ -20,7 +20,7 @@ blocking reqwest natively, the Worker's `fetch` and WebCrypto in the module).
 
 **This CLI is live-verified as of 2026-08-13.** The first authenticated run —
 a View-only ECDSA CDP key, created for the purpose — proved the hand-rolled
-JWT on the first request, walked all 130 accounts and a 3,559-row ledger, and
+JWT on the first request, walked every account and the full ledger, and
 exercised the v3 Advanced Trade read surface with the same token construction.
 The fixtures are now **scrubbed captures** from that run, not hand-authored
 guesses.
@@ -128,10 +128,12 @@ Full detail and citations in `docs/api.md`. The short list:
 2. **Reward income has FOUR spellings**: `staking_reward` (the most common,
    despite being absent from Coinbase's documented type list), `earn_payout`,
    `inflation_reward`, `interest`. An earlier revision of this file asserted
-   `staking_reward` doesn't exist — the first live capture refuted it 1,410
-   rows to 20. Filter for all four or underreport income.
-3. **`details` never appears, and `description` almost never** (live:
-   0 and ~1.4% of 3,559 rows). The `type` column is the real signal; don't
+   `staking_reward` doesn't exist — the first live capture refuted it: it was
+   the most common type in the ledger. Filter for all four or underreport
+   income.
+3. **`details` never appears, and `description` almost never** (a
+   full-ledger capture had `details` on no row and `description` on a small
+   minority). The `type` column is the real signal; don't
    build anything that needs a human label per row.
 4. **Inbound transfers are positive `send` rows** — the documented `receive`
    type never appears. `send` is a direction-neutral type; the sign is the

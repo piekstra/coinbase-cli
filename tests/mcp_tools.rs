@@ -217,7 +217,7 @@ fn transactions_concise_by_wallet_name() {
     // An empty memo is dropped; a real one is kept, as data.
     assert!(items[3].get("description").is_none(), "{}", items[3]);
     assert_eq!(items[10]["description"], "Sample memo");
-    // No filters: the fetch asks Coinbase for no more than the page needs.
+    // One read of the whole ledger, whatever the page needs.
     assert_eq!(t_source(&t).fetches(), 1);
 }
 
@@ -310,7 +310,7 @@ fn a_transaction_that_posts_between_pages_repeats_nothing() {
     newer["id"] = json!("30000000-0000-0000-0000-000000000001");
     newer["created_at"] = json!("2099-01-01T00:00:00Z");
     let mut grown = vec![newer];
-    grown.extend(ledger);
+    grown.extend(ledger.clone());
     let t = CoinbaseTools::new(Fixtures::new().with_transactions(grown), None);
     let mut next = args;
     next["cursor"] = first["next_cursor"].clone();
@@ -319,6 +319,12 @@ fn a_transaction_that_posts_between_pages_repeats_nothing() {
     let ids = names(&second["items"], "id");
     assert!(!ids.contains(&last_seen), "{ids:?}");
     assert_eq!(ids.len(), 5);
+    // And none skipped: the two pages are the first ten rows of the ledger as it was.
+    let t = CoinbaseTools::new(Fixtures::new().with_transactions(ledger), None);
+    let whole = json!({"account": "Sample BTC Wallet", "limit": 10, "response_format": "detailed"});
+    let r = call(&t, TRANSACTIONS_TOOL, whole);
+    let ten = names(&ok(&t, TRANSACTIONS_TOOL, &r)["items"], "id");
+    assert_eq!(ids, ten[5..]);
 }
 
 #[test]

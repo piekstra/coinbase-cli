@@ -389,8 +389,10 @@ impl<S: Source> Toolset for CoinbaseTools<S> {
                  native_currency, a third party's memo as description, and status when not \
                  completed; detailed adds id, created_at, network_fee, trade_fee and fill (an \
                  Advanced Trade fill's price and commission). Returns account, items, returned \
-                 and next_cursor. Narrow with since/until and types; dates filter after the \
-                 whole ledger is fetched, so a long history is slow.",
+                 and next_cursor. Rows are newest first by created_at, and rows of the same second \
+                 keep a fixed order of their own. Every call and every page reads the wallet's \
+                 whole ledger, filtered or not, so a long history is slow whatever the arguments; \
+                 since/until and types narrow what comes back.",
             )
             .input::<TransactionsArgs>()
             .output::<TransactionsOut>(),

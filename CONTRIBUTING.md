@@ -26,13 +26,18 @@ contribution is licensed under those same terms.
 ## Dev loop
 
 ```console
-$ make verify     # fmt-check + clippy -D warnings + tests + smoke — the CI gate
+$ make verify     # fmt-check + clippy -D warnings (native and wasm) + tests + wasm32 clippy + smoke
 $ make test       # unit + integration (fully offline; no network, no creds)
 $ make dev        # debug build, re-signed so keychain grants survive rebuilds
 $ cargo run -- <command>
 ```
 
-`make verify` is exactly what CI runs; a green local run predicts a green CI run.
+`make verify` is the local gate. CI runs all of it except `smoke`, plus a
+release build, `make wasm` (the Worker module; needs Node) and a cargo-audit /
+cargo-deny / gitleaks job, so a green `make verify` and `make wasm` predict a
+green build job. Neither the tests nor `smoke` read your real key: both point
+`CBASE_KEYCHAIN_SERVICE` at `piekstra.cbase.hermetic-tests`, a keychain service
+that holds nothing.
 
 ## Pull requests
 

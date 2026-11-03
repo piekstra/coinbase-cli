@@ -5,8 +5,12 @@ layout, the auth model, the conventions, and Coinbase's traps.
 
 Claude-specific notes:
 
-- **`make verify` is the gate.** Run it before calling a change done; it's
-  exactly what CI runs (`fmt-check` + `clippy -D warnings` + tests + smoke).
+- **`make verify` is the gate.** Run it before calling a change done. It runs
+  `fmt-check`, `clippy -D warnings` (with and without `wasm`), the tests,
+  wasm32 clippy and `smoke`. CI runs all of that except `smoke`, plus a
+  release build, `make wasm` and an audit / deny / gitleaks job. `smoke` reads
+  only the empty `piekstra.cbase.hermetic-tests` keychain service, never the
+  real key (AGENTS.md, "Dev loop").
 - **This CLI has never made an authenticated Coinbase call** and has never read
   account data. Don't write "verified" or "confirmed working" about anything
   touching the network. The fixtures are hand-authored from published docs, not

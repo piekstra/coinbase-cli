@@ -11,11 +11,13 @@ Claude-specific notes:
   release build, `make wasm` and an audit / deny / gitleaks job. `smoke` reads
   only the empty `piekstra.cbase.hermetic-tests` keychain service, never the
   real key (AGENTS.md, "Dev loop").
-- **This CLI has never made an authenticated Coinbase call** and has never read
-  account data. Don't write "verified" or "confirmed working" about anything
-  touching the network. The fixtures are hand-authored from published docs, not
-  captures — `tests/fixtures/README.md` is explicit about what that does and
-  doesn't prove. Reaching a 401 proves the transport, not the JWT.
+- **Live verification happened on 2026-08-13.** A View-only ECDSA CDP key
+  proved the hand-rolled JWT, walked every account and the full ledger, and
+  exercised the v3 Advanced Trade read surface. The fixtures are scrubbed
+  captures from that run (`tests/fixtures/README.md`). `docs/api.md` §5 lists
+  what it left unverified: nonce enforcement, Ed25519 rejection, Advanced Trade
+  rate limits and the v3 fills feed. Don't write "verified" or "confirmed
+  working" about anything you didn't actually run.
 - **Tests are offline.** No test may touch the network, the keychain, or a
   credential. If you need new Coinbase data, add a fixture and cite the doc URL
   in `tests/fixtures/README.md`.

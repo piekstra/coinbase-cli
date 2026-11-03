@@ -2,7 +2,7 @@
 //!
 //! The binary in `main.rs` is a thin clap shell over these modules. They are
 //! public so the integration tests can exercise the parsers and the JWT signer
-//! directly, offline, against hand-authored fixtures.
+//! directly, offline, against the scrubbed live captures in `tests/fixtures/`.
 //!
 //! Read-only by construction: nothing here places an order, moves funds, or
 //! writes to a Coinbase account. The `api` passthrough refuses every verb but

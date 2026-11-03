@@ -23,7 +23,7 @@ impl Source for NoSource {
     async fn accounts(&self) -> Result<Vec<Value>, CliError> {
         unreachable!()
     }
-    async fn transactions(&self, _: &str, _: Option<u32>) -> Result<Vec<Value>, CliError> {
+    async fn transactions(&self, _: &str) -> Result<Vec<Value>, CliError> {
         unreachable!()
     }
 }

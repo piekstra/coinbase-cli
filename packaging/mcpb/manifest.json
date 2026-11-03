@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "cbase",
   "display_name": "Coinbase (cbase)",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Read-only access to your own Coinbase balances and transaction history, through the open-source cbase CLI.",
   "long_description": "Ask Claude about your Coinbase wallets: what you hold, and what happened in a wallet over a period (buys, sells, sends, converts, staking and other reward income). Two read-only tools, coinbase_accounts and coinbase_transactions; nothing can trade, send or change your account. Your Coinbase Developer Platform API key stays on your computer: Claude Desktop keeps it in its own secure store and passes it to the bundled cbase binary, which calls Coinbase directly. Create a key with only the View permission at portal.cdp.coinbase.com. Unofficial; not affiliated with Coinbase.",
   "author": {

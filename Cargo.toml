@@ -1,6 +1,6 @@
 [package]
 name = "coinbase-cli"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.88"
 description = "Coinbase accounts and transaction history from the command line — Keychain-secured, agent-friendly. Read-only. Unofficial."
@@ -52,17 +52,17 @@ serde = { version = "1", features = ["derive"] }
 # preserve_order keeps DTO fields and table columns in the order the code builds
 # them, rather than alphabetized by serde_json's default map ordering.
 serde_json = { version = "1", features = ["preserve_order"] }
-pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0" }
-pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
-pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
-pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
-pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
+pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.15.1" }
+pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.15.1", optional = true }
+pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.15.1", optional = true }
+pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.15.1", optional = true }
+pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.15.1", optional = true }
 # The blocking HTTP client, behind pk-cli-core's `Transport`.
-pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
-pk-cli-utility = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", optional = true }
+pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.15.1", optional = true }
+pk-cli-utility = { git = "https://github.com/piekstra/cli-common", tag = "v0.15.1", optional = true }
 # The MCP profile's tools over the same client (DESIGN.md §1.9): `cbase mcp`
 # with `native`, the Worker module with `wasm`.
-pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0" }
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.15.1" }
 schemars = "1"
 
 # --- CDP JWT signing -------------------------------------------------------
@@ -92,7 +92,7 @@ rand = "0.10"
 [dev-dependencies]
 # The MCP profile's conformance checks and, with `wasm`, the stand-in host,
 # for the tests only.
-pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.14.0", features = ["test-util"] }
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.15.1", features = ["test-util"] }
 assert_cmd = "2"
 predicates = "3"
 

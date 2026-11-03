@@ -216,11 +216,15 @@ when both are set the keychain is not read at all. See
 ## Development
 
 ```console
-$ make verify     # fmt-check + clippy (native and wasm) + tests + wasm32 clippy + smoke — the CI gate
+$ make verify     # fmt-check + clippy (native and wasm) + tests + wasm32 clippy + smoke
 $ make test       # fully offline: no network, no keychain, no credential
 $ make wasm       # the MCP tools as a WebAssembly module, for the Cloudflare connector
 $ make dev        # debug build, re-signed so keychain grants survive rebuilds
 ```
+
+`make verify` is the local gate; CI runs all of it except `smoke`, plus
+`make wasm`. `smoke` never reads the real keychain: its `auth status` step
+reads an empty service (`CBASE_KEYCHAIN_SERVICE=piekstra.cbase.hermetic-tests`).
 
 Agent guide: [AGENTS.md](AGENTS.md). API notes and traps: [docs/api.md](docs/api.md).
 

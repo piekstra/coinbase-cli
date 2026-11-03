@@ -159,19 +159,30 @@ $ make dev        # debug build, re-signed with the stable identity
 $ make install    # installs AND re-signs — `cargo install` alone re-prompts the keychain
 ```
 
+CI (`.github/workflows/ci.yml`) runs every step of `make verify` except
+`smoke`, plus a release build, `make wasm`, and a cargo-audit / cargo-deny /
+gitleaks job.
+
 To try a module change in the connector before releasing it, build it with
 `make wasm` and point cli-common's `connector/` at the file
 (`CONNECTOR_MODULE_COINBASE=<path> npm run e2e` there).
 
 Tests are **fully offline** and must stay that way: no network, no keychain, no
 credential. Nothing in the suite should ever spend a Coinbase request.
-Hermeticity is enforced by `CBASE_KEYCHAIN_SERVICE`: the `cli_surface` suite
-points it at a service that holds nothing, so the exit-3 cases stay true even
-on a machine with a real key stored — without it, `cargo test` opens the
-developer's actual credential from an ad-hoc-signed binary (a macOS approval
-prompt per rebuild) and then hits Coinbase for real. Found the hard way on the
-first live run. `tests/mcp_tools.rs` reaches no client at all: it runs the
+Hermeticity is enforced by `CBASE_KEYCHAIN_SERVICE`: the `cli_surface` and
+`mcp_stdio` suites point it at a service that holds nothing, so the exit-3
+cases stay true even on a machine with a real key stored — without it,
+`cargo test` opens the developer's actual credential from an ad-hoc-signed
+binary (a macOS approval prompt per rebuild) and then hits Coinbase for real.
+Found the hard way on the first live run. `tests/mcp_tools.rs` reaches no client at all: it runs the
 tools over a fixture `Source`.
+
+`make smoke` never reads the real keychain either. Its one keychain-reading
+step, `auth status`, runs from the release binary with
+`CBASE_KEYCHAIN_SERVICE=piekstra.cbase.hermetic-tests`, the same empty service,
+so `make verify` raises no keychain dialog whatever the binary's code identity.
+Its other steps (`--version`, `--help`, `info`, `mcp --list-tools`) read no
+key. A new smoke step that can reach the keychain carries the same override.
 
 ## Working with the live credential
 

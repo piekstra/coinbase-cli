@@ -21,11 +21,11 @@ all: verify
 build:
 	$(CARGO) build
 
-# Signed like `install`: `smoke` runs this binary against the real keychain
-# (`auth status`), and an ad-hoc-signed release build is a brand-new code
-# identity every rebuild -- each `make verify` would throw fresh "Always
-# Allow" prompts, one per keychain entry. Signed with the stable identity,
-# the grant made for the installed binary covers this one too.
+# Signed like `install`: this is the binary a person runs by hand against the
+# real keychain while testing, and an ad-hoc-signed release build is a
+# brand-new code identity every rebuild that would throw a fresh "Always
+# Allow" prompt per keychain entry. Signed with the stable identity, the grant
+# made for the installed binary covers this one too.
 release: SIGN_TARGET = $(TARGET_DIR)/release/$(BIN)
 release:
 	$(CARGO) build --release
@@ -87,12 +87,17 @@ else echo "cli-common/scripts/dev-sign.sh not found — $(SIGN_TARGET) left ad-h
 endef
 
 # Cheap sanity checks needing no credential or network: version, help, and the
-# discovery commands that answer without a key.
+# discovery commands that answer without a key. `auth status` is the one step
+# that reads the keychain, so it reads `piekstra.cbase.hermetic-tests`, a
+# service that holds nothing (the test suite's override), never the real
+# `piekstra.cbase` entry. Reading a missing item raises no keychain dialog,
+# whatever the binary's code identity. `mcp --list-tools` prints the tool
+# definitions without reading a key.
 smoke: release
 	$(TARGET_DIR)/release/$(BIN) --version
 	$(TARGET_DIR)/release/$(BIN) --help > /dev/null
 	$(TARGET_DIR)/release/$(BIN) info > /dev/null
 	$(TARGET_DIR)/release/$(BIN) mcp --list-tools > /dev/null
-	$(TARGET_DIR)/release/$(BIN) auth status --json > /dev/null
+	CBASE_KEYCHAIN_SERVICE=piekstra.cbase.hermetic-tests $(TARGET_DIR)/release/$(BIN) auth status --json > /dev/null
 
 verify: fmt-check lint test wasm-check smoke

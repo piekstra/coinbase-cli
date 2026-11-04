@@ -18,7 +18,8 @@
 use pk_cli_core::transport::{PlatformSigner, Transport};
 use pk_cli_core::{dates, resolve, CliError};
 use pk_cli_mcp::{
-    parse_args, ListArgs, Page, PageRequest, Server, ToolDef, ToolError, ToolOutput, Toolset,
+    parse_args, ListArgs, Order, Page, PageRequest, PositionKey, PositionRequest, Server, ToolDef,
+    ToolError, ToolOutput, Toolset,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -44,13 +45,9 @@ pub const REWARD_TYPES: &[&str] = &[
 pub trait Source {
     /// Every account row (`GET /v2/accounts`, all pages).
     async fn accounts(&self) -> Result<Vec<Value>, CliError>;
-    /// One account's transaction rows, newest first, at most `limit` when
-    /// given (`GET /v2/accounts/:id/transactions`).
-    async fn transactions(
-        &self,
-        account_id: &str,
-        limit: Option<u32>,
-    ) -> Result<Vec<Value>, CliError>;
+    /// One account's transaction rows, newest first, all of them
+    /// (`GET /v2/accounts/:id/transactions`).
+    async fn transactions(&self, account_id: &str) -> Result<Vec<Value>, CliError>;
 }
 
 /// The live API over any transport, from a client built up front: the Worker
@@ -75,13 +72,9 @@ impl<T: Transport + PlatformSigner> Source for ClientSource<T> {
         self.client()?.get_all(ACCOUNTS, &[], None).await
     }
 
-    async fn transactions(
-        &self,
-        account_id: &str,
-        limit: Option<u32>,
-    ) -> Result<Vec<Value>, CliError> {
+    async fn transactions(&self, account_id: &str) -> Result<Vec<Value>, CliError> {
         self.client()?
-            .get_all(&account_transactions(account_id), &[], limit)
+            .get_all(&account_transactions(account_id), &[], None)
             .await
     }
 }
@@ -156,13 +149,9 @@ mod live {
             self.forget_rejected(out)
         }
 
-        async fn transactions(
-            &self,
-            account_id: &str,
-            limit: Option<u32>,
-        ) -> Result<Vec<Value>, CliError> {
+        async fn transactions(&self, account_id: &str) -> Result<Vec<Value>, CliError> {
             let out = ClientSource::new(self.client())
-                .transactions(account_id, limit)
+                .transactions(account_id)
                 .await;
             self.forget_rejected(out)
         }
@@ -400,8 +389,10 @@ impl<S: Source> Toolset for CoinbaseTools<S> {
                  native_currency, a third party's memo as description, and status when not \
                  completed; detailed adds id, created_at, network_fee, trade_fee and fill (an \
                  Advanced Trade fill's price and commission). Returns account, items, returned \
-                 and next_cursor. Narrow with since/until and types; dates filter after the \
-                 whole ledger is fetched, so a long history is slow.",
+                 and next_cursor. Rows are newest first by created_at, and rows of the same second \
+                 keep a fixed order of their own. Every call and every page reads the wallet's \
+                 whole ledger, filtered or not, so a long history is slow whatever the arguments; \
+                 since/until and types narrow what comes back.",
             )
             .input::<TransactionsArgs>()
             .output::<TransactionsOut>(),
@@ -453,7 +444,7 @@ impl<S: Source> CoinbaseTools<S> {
                      code or id from coinbase_accounts)",
                 )
             })?;
-        let page = PageRequest::new(
+        let page = PositionRequest::new(
             &args.list,
             &TransactionsFilter {
                 account: &reference,
@@ -476,13 +467,11 @@ impl<S: Source> CoinbaseTools<S> {
             "Call {ACCOUNTS_TOOL} with include_zero=true for every wallet's name, then pass one name"
         )))?;
 
-        // Without filters the newest `wanted` rows are the page and the one
-        // after it; with filters the matching rows may be anywhere, so the
-        // whole ledger is read (the v2 endpoint has no date parameters).
-        let unfiltered = since.is_none() && until.is_none() && types.is_empty();
-        let limit = unfiltered.then(|| u32::try_from(page.wanted()).unwrap_or(u32::MAX));
-        let rows = self.source.transactions(&account.id, limit).await?;
-        let matched: Vec<TransactionItem> =
+        // The whole ledger, on every page: the matching rows may be anywhere (the v2 endpoint has
+        // no date parameters), and a cursor holds a row's position, not a count that a transaction
+        // posting between pages would throw off.
+        let rows = self.source.transactions(&account.id).await?;
+        let matched: Vec<(PositionKey, TransactionItem)> =
             parse::within(parse::transactions(&rows), since, until, |t| {
                 t.date.as_str()
             })
@@ -493,7 +482,10 @@ impl<S: Source> CoinbaseTools<S> {
                         .as_deref()
                         .is_some_and(|k| types.iter().any(|w| w.eq_ignore_ascii_case(k)))
             })
-            .map(|t| TransactionItem::from(t, detailed))
+            .map(|t| {
+                let key = PositionKey::new(t.created_at.as_deref().unwrap_or(&t.date), &t.id);
+                (key, TransactionItem::from(t, detailed))
+            })
             .collect();
         ToolOutput::new(&TransactionsOut {
             account: AccountRef {
@@ -501,7 +493,7 @@ impl<S: Source> CoinbaseTools<S> {
                 currency: account.currency.clone(),
                 id: detailed.then(|| account.id.clone()),
             },
-            page: page.page(matched, "since/until or types")?,
+            page: page.page(matched, Order::Descending, "since/until or types")?,
         })
     }
 }

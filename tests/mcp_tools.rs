@@ -22,8 +22,8 @@ fn fixture_rows(name: &str) -> Vec<Value> {
 struct Fixtures {
     accounts: Vec<Value>,
     transactions: Vec<Value>,
-    /// The `limit` of every transactions fetch, to check the pushdown.
-    fetches: Mutex<Vec<Option<u32>>>,
+    /// How many transactions fetches ran.
+    fetches: Mutex<usize>,
     /// When set, every call fails with this.
     fail: Mutex<Option<CliError>>,
 }
@@ -35,7 +35,7 @@ impl Fixtures {
         Self {
             accounts,
             transactions: fixture_rows("transactions.json"),
-            fetches: Mutex::new(Vec::new()),
+            fetches: Mutex::new(0),
             fail: Mutex::new(None),
         }
     }
@@ -45,8 +45,8 @@ impl Fixtures {
         self
     }
 
-    fn fetches(&self) -> Vec<Option<u32>> {
-        self.fetches.lock().unwrap().clone()
+    fn fetches(&self) -> usize {
+        *self.fetches.lock().unwrap()
     }
 
     fn failure(&self) -> Option<CliError> {
@@ -62,17 +62,12 @@ impl Source for Fixtures {
         }
     }
 
-    async fn transactions(
-        &self,
-        _account_id: &str,
-        limit: Option<u32>,
-    ) -> Result<Vec<Value>, CliError> {
-        self.fetches.lock().unwrap().push(limit);
+    async fn transactions(&self, _account_id: &str) -> Result<Vec<Value>, CliError> {
+        *self.fetches.lock().unwrap() += 1;
         if let Some(e) = self.failure() {
             return Err(e);
         }
-        let n = limit.map_or(usize::MAX, |l| l as usize);
-        Ok(self.transactions.iter().take(n).cloned().collect())
+        Ok(self.transactions.clone())
     }
 }
 
@@ -222,8 +217,8 @@ fn transactions_concise_by_wallet_name() {
     // An empty memo is dropped; a real one is kept, as data.
     assert!(items[3].get("description").is_none(), "{}", items[3]);
     assert_eq!(items[10]["description"], "Sample memo");
-    // No filters: the fetch asks Coinbase for no more than the page needs.
-    assert_eq!(t_source(&t).fetches(), [Some(26)]);
+    // One read of the whole ledger, whatever the page needs.
+    assert_eq!(t_source(&t).fetches(), 1);
 }
 
 #[test]
@@ -261,7 +256,7 @@ fn rewards_stands_for_all_four_reward_types() {
         ]
     );
     // A filter can match anywhere in the ledger: the whole of it is read.
-    assert_eq!(t_source(&t).fetches(), [None]);
+    assert_eq!(t_source(&t).fetches(), 1);
 }
 
 #[test]
@@ -298,7 +293,38 @@ fn transactions_walk_the_ledger_page_by_page() {
         }
     }
     assert_eq!(seen.len(), 12);
-    assert_eq!(t_source(&t).fetches(), [Some(6), Some(11), Some(16)]);
+    assert_eq!(t_source(&t).fetches(), 3);
+}
+
+/// A transaction that posts between pages: a count of rows would show the page's last row again.
+#[test]
+fn a_transaction_that_posts_between_pages_repeats_nothing() {
+    let ledger = fixture_rows("transactions.json");
+    let t = CoinbaseTools::new(Fixtures::new().with_transactions(ledger.clone()), None);
+    let args = json!({"account": "Sample BTC Wallet", "limit": 5, "response_format": "detailed"});
+    let r = call(&t, TRANSACTIONS_TOOL, args.clone());
+    let first = ok(&t, TRANSACTIONS_TOOL, &r).clone();
+    let last_seen = first["items"][4]["id"].as_str().unwrap().to_string();
+
+    let mut newer = ledger[0].clone();
+    newer["id"] = json!("30000000-0000-0000-0000-000000000001");
+    newer["created_at"] = json!("2099-01-01T00:00:00Z");
+    let mut grown = vec![newer];
+    grown.extend(ledger.clone());
+    let t = CoinbaseTools::new(Fixtures::new().with_transactions(grown), None);
+    let mut next = args;
+    next["cursor"] = first["next_cursor"].clone();
+    let r = call(&t, TRANSACTIONS_TOOL, next);
+    let second = ok(&t, TRANSACTIONS_TOOL, &r);
+    let ids = names(&second["items"], "id");
+    assert!(!ids.contains(&last_seen), "{ids:?}");
+    assert_eq!(ids.len(), 5);
+    // And none skipped: the two pages are the first ten rows of the ledger as it was.
+    let t = CoinbaseTools::new(Fixtures::new().with_transactions(ledger), None);
+    let whole = json!({"account": "Sample BTC Wallet", "limit": 10, "response_format": "detailed"});
+    let r = call(&t, TRANSACTIONS_TOOL, whole);
+    let ten = names(&ok(&t, TRANSACTIONS_TOOL, &r)["items"], "id");
+    assert_eq!(ids, ten[5..]);
 }
 
 #[test]
@@ -393,7 +419,7 @@ fn an_unknown_wallet_is_not_found_with_the_fix() {
     .to_string();
     assert!(text.starts_with("not_found:"), "{text}");
     assert!(text.contains("include_zero=true"), "{text}");
-    assert!(t_source(&t).fetches().is_empty(), "no ledger fetched");
+    assert_eq!(t_source(&t).fetches(), 0, "no ledger fetched");
 }
 
 #[test]
@@ -426,7 +452,7 @@ fn bad_arguments_fail_before_any_request() {
         assert!(text.starts_with("usage:"), "{args}: {text}");
         assert!(text.contains(needle), "{args}: {text}");
     }
-    assert!(t_source(&t).fetches().is_empty());
+    assert_eq!(t_source(&t).fetches(), 0);
 }
 
 #[test]

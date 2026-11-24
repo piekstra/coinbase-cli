@@ -16,7 +16,7 @@
   "homepage": "https://github.com/piekstra/coinbase-cli",
   "documentation": "https://github.com/piekstra/coinbase-cli#use-with-claude",
   "support": "https://github.com/piekstra/coinbase-cli/issues",
-  "license": "MIT OR Apache-2.0",
+  "license": "AGPL-3.0-only",
   "keywords": ["coinbase", "crypto", "finance", "transactions", "read-only"],
   "server": {
     "type": "binary",
